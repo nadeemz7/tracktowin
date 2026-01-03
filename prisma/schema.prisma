@@ -1,0 +1,796 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Agency {
+  id                        String                     @id @default(cuid())
+  name                      String
+  profileName               String?
+  ownerName                 String?
+  address                   String?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  activityTypes             ActivityType[]
+  commissionPlans           CommissionPlan[]
+  compPlans                 CompPlan[]
+  households                Household[]
+  householdFieldDefinitions HouseholdFieldDefinition[]
+  linesOfBusiness           LineOfBusiness[]
+  marketingSourceOptions    MarketingSourceOption[]
+  peoplePrimary             Person[]                   @relation("PrimaryAgency")
+  premiumBuckets            PremiumBucket[]
+  productionExpectations    ProductionExpectation[]
+  reportPresets             ReportPreset[]
+  soldProducts              SoldProduct[]
+  teams                     Team[]
+  valuePolicyDefaults       ValuePolicyDefault[]
+  winTheDayPlans            WinTheDayPlan[]
+}
+
+model LineOfBusiness {
+  id                     String                  @id @default(cuid())
+  agencyId               String
+  name                   String
+  premiumCategory        PremiumCategory
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  agency                 Agency                  @relation(fields: [agencyId], references: [id])
+  products               Product[]
+  productionExpectations ProductionExpectation[]
+
+  @@unique([agencyId, name])
+}
+
+model Product {
+  id               String         @id @default(cuid())
+  lineOfBusinessId String
+  name             String
+  productType      ProductType
+  isActive         Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  lineOfBusiness   LineOfBusiness @relation(fields: [lineOfBusinessId], references: [id])
+  soldProducts     SoldProduct[]
+
+  @@unique([lineOfBusinessId, name])
+}
+
+model Household {
+  id              String                @id @default(cuid())
+  agencyId        String
+  firstName       String
+  lastName        String
+  ecrmLink        String?
+  marketingSource String?
+  onboarded       Boolean               @default(false)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  agency          Agency                @relation(fields: [agencyId], references: [id])
+  fieldValues     HouseholdFieldValue[]
+  soldProducts    SoldProduct[]
+
+  @@index([agencyId, lastName, firstName])
+}
+
+model SoldProduct {
+  id              String       @id @default(cuid())
+  agencyId        String
+  productId       String
+  householdId     String
+  soldByName      String?
+  soldByPersonId  String?
+  dateSold        DateTime
+  premium         Float
+  status          PolicyStatus @default(WRITTEN)
+  isValueHealth   Boolean      @default(false)
+  isValueLife     Boolean      @default(false)
+  policyFirstName String?
+  policyLastName  String?
+  policyId        String?
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  agency          Agency       @relation(fields: [agencyId], references: [id])
+  household       Household    @relation(fields: [householdId], references: [id])
+  product         Product      @relation(fields: [productId], references: [id])
+  soldByPerson    Person?      @relation(fields: [soldByPersonId], references: [id])
+
+  @@index([agencyId, dateSold])
+  @@index([productId, dateSold])
+  @@index([householdId, dateSold])
+  @@index([soldByName, dateSold])
+  @@index([soldByPersonId, dateSold])
+}
+
+model ActivityRecord {
+  id           String   @id @default(cuid())
+  personName   String?
+  personId     String?
+  activityDate DateTime
+  activityName String
+  count        Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  person       Person?  @relation(fields: [personId], references: [id])
+
+  @@index([personName, activityDate])
+  @@index([personId, activityDate])
+}
+
+model Person {
+  id              String                         @id @default(cuid())
+  fullName        String
+  email           String?
+  teamType        TeamType
+  active          Boolean                        @default(true)
+  teamId          String?
+  roleId          String?
+  primaryAgencyId String?
+  isAdmin         Boolean                        @default(false)
+  isManager       Boolean                        @default(false)
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+  activityRecords ActivityRecord[]
+  commissionPlans CommissionPlan[]
+  planAssignments CommissionPlanAssignment[]
+  primaryAgency   Agency?                        @relation("PrimaryAgency", fields: [primaryAgencyId], references: [id])
+  role            Role?                          @relation(fields: [roleId], references: [id])
+  team            Team?                          @relation(fields: [teamId], references: [id])
+  soldProducts    SoldProduct[]
+  winAssignments  WinTheDayPlanPersonAssignment?
+}
+
+model MarketingSourceOption {
+  id        String   @id @default(cuid())
+  agencyId  String
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  agency    Agency   @relation(fields: [agencyId], references: [id])
+
+  @@index([agencyId, active])
+}
+
+model HouseholdFieldDefinition {
+  id        String                @id @default(cuid())
+  agencyId  String
+  fieldName String
+  fieldType String
+  required  Boolean               @default(false)
+  active    Boolean               @default(true)
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+  charLimit Int?
+  options   Json?
+  agency    Agency                @relation(fields: [agencyId], references: [id])
+  values    HouseholdFieldValue[]
+
+  @@unique([agencyId, fieldName])
+  @@index([agencyId, active])
+}
+
+model HouseholdFieldValue {
+  id                String                   @id @default(cuid())
+  householdId       String
+  fieldDefinitionId String
+  value             String
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  fieldDefinition   HouseholdFieldDefinition @relation(fields: [fieldDefinitionId], references: [id])
+  household         Household                @relation(fields: [householdId], references: [id])
+
+  @@index([householdId])
+  @@index([fieldDefinitionId])
+}
+
+model Team {
+  id                   String                       @id @default(cuid())
+  agencyId             String
+  name                 String
+  active               Boolean                      @default(true)
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  activityExpectations ActivityDailyExpectation[]
+  activityVisibilities ActivityTeamVisibility[]
+  commissionPlans      CommissionPlan[]
+  people               Person[]
+  roles                Role[]
+  agency               Agency                       @relation(fields: [agencyId], references: [id])
+  winAssignments       WinTheDayPlanTeamAssignment?
+
+  @@unique([agencyId, name])
+}
+
+model Role {
+  id                     String                  @id @default(cuid())
+  teamId                 String
+  name                   String
+  active                 Boolean                 @default(true)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  commissionPlans        CommissionPlan[]
+  people                 Person[]
+  productionExpectations ProductionExpectation[]
+  team                   Team                    @relation(fields: [teamId], references: [id])
+
+  @@unique([teamId, name])
+}
+
+model PremiumBucket {
+  id               String   @id @default(cuid())
+  agencyId         String
+  name             String
+  description      String?
+  includesLobs     String[]
+  includesProducts String[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  agency           Agency   @relation(fields: [agencyId], references: [id])
+
+  @@unique([agencyId, name])
+}
+
+model ValuePolicyDefault {
+  id             String   @id @default(cuid())
+  agencyId       String
+  lineOfBusiness String
+  flagField      String
+  threshold      Float
+  notes          String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  agency         Agency   @relation(fields: [agencyId], references: [id])
+
+  @@unique([agencyId, flagField, lineOfBusiness])
+}
+
+model CommissionPlan {
+  id                   String                     @id @default(cuid())
+  agencyId             String?
+  name                 String
+  scope                CommissionScope
+  teamId               String?
+  roleId               String?
+  personId             String?
+  teamType             TeamType?
+  isDefaultForTeamType Boolean                    @default(false)
+  effectiveFrom        DateTime                   @default(now())
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  components           CommissionComponent[]
+  agency               Agency?                    @relation(fields: [agencyId], references: [id])
+  person               Person?                    @relation(fields: [personId], references: [id])
+  role                 Role?                      @relation(fields: [roleId], references: [id])
+  team                 Team?                      @relation(fields: [teamId], references: [id])
+  assignments          CommissionPlanAssignment[]
+
+  @@index([agencyId])
+  @@index([teamId])
+  @@index([roleId])
+  @@index([personId])
+  @@index([teamType])
+}
+
+model CommissionComponent {
+  id            String         @id @default(cuid())
+  planId        String
+  name          String
+  componentType String
+  config        Json
+  displayOrder  Int            @default(0)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  plan          CommissionPlan @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+}
+
+model CommissionPlanAssignment {
+  id            String         @id @default(cuid())
+  personId      String
+  planId        String
+  effectiveFrom DateTime       @default(now())
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  person        Person         @relation(fields: [personId], references: [id])
+  plan          CommissionPlan @relation(fields: [planId], references: [id])
+
+  @@unique([personId, planId, effectiveFrom])
+  @@index([personId])
+}
+
+model ActivityType {
+  id                     String                     @id @default(cuid())
+  agencyId               String?
+  name                   String
+  description            String?
+  active                 Boolean                    @default(true)
+  inputMode              ActivityInputMode          @default(COUNT)
+  unitLabel              String?
+  requiresFullName       Boolean                    @default(false)
+  payable                Boolean                    @default(false)
+  payoutMode             String?
+  flatPayoutValue        Float?
+  trackOnly              Boolean                    @default(true)
+  defaultQuotaPerDay     Int?
+  groupingHint           ActivityGroupingHint?
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+  expectations           ActivityDailyExpectation[]
+  payoutTiers            ActivityPayoutTier[]
+  visibilities           ActivityTeamVisibility[]
+  agency                 Agency?                    @relation(fields: [agencyId], references: [id])
+  productionExpectations ProductionExpectation[]
+  winRules               WinTheDayRule[]
+
+  @@unique([agencyId, name])
+  @@index([agencyId, active])
+}
+
+model ActivityTeamVisibility {
+  id               String       @id @default(cuid())
+  activityTypeId   String
+  teamId           String
+  canUse           Boolean      @default(true)
+  isDefaultForTeam Boolean      @default(false)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  activityType     ActivityType @relation(fields: [activityTypeId], references: [id])
+  team             Team         @relation(fields: [teamId], references: [id])
+
+  @@unique([activityTypeId, teamId])
+  @@index([teamId])
+}
+
+model ActivityDailyExpectation {
+  id             String       @id @default(cuid())
+  activityTypeId String
+  teamId         String
+  expectedPerDay Int?
+  required       Boolean      @default(false)
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  activityType   ActivityType @relation(fields: [activityTypeId], references: [id])
+  team           Team         @relation(fields: [teamId], references: [id])
+
+  @@unique([activityTypeId, teamId])
+  @@index([teamId])
+}
+
+model ActivityPayoutTier {
+  id             String       @id @default(cuid())
+  activityTypeId String
+  minValue       Float
+  maxValue       Float?
+  payoutValue    Float
+  orderIndex     Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  activityType   ActivityType @relation(fields: [activityTypeId], references: [id])
+
+  @@index([activityTypeId])
+}
+
+model WinTheDayPlan {
+  id                String                          @id @default(cuid())
+  agencyId          String?
+  name              String
+  pointsToWin       Int
+  active            Boolean                         @default(true)
+  archivedAt        DateTime?
+  createdAt         DateTime                        @default(now())
+  updatedAt         DateTime                        @updatedAt
+  agency            Agency?                         @relation(fields: [agencyId], references: [id])
+  personAssignments WinTheDayPlanPersonAssignment[]
+  teamAssignments   WinTheDayPlanTeamAssignment[]
+  rules             WinTheDayRule[]
+
+  @@index([agencyId])
+}
+
+model WinTheDayRule {
+  id             String        @id @default(cuid())
+  planId         String
+  orderIndex     Int           @default(0)
+  sourceType     WinSourceType
+  activityTypeId String?
+  unitsPerPoint  Float?
+  pointsAwarded  Float         @default(1)
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  activityType   ActivityType? @relation(fields: [activityTypeId], references: [id])
+  plan           WinTheDayPlan @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+  @@index([activityTypeId])
+}
+
+model WinTheDayPlanTeamAssignment {
+  id        String        @id @default(cuid())
+  planId    String
+  teamId    String        @unique
+  active    Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  plan      WinTheDayPlan @relation(fields: [planId], references: [id])
+  team      Team          @relation(fields: [teamId], references: [id])
+
+  @@index([planId])
+}
+
+model WinTheDayPlanPersonAssignment {
+  id         String        @id @default(cuid())
+  planId     String
+  personId   String?       @unique
+  personName String?
+  active     Boolean       @default(true)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  person     Person?       @relation(fields: [personId], references: [id])
+  plan       WinTheDayPlan @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+}
+
+model CompPlan {
+  id                       String               @id @default(cuid())
+  agencyId                 String?
+  name                     String
+  description              String?
+  status                   CompPlanStatus       @default(DRAFT)
+  active                   Boolean              @default(true)
+  archivedAt               DateTime?
+  defaultStatusEligibility PolicyStatus[]
+  effectiveStartMonth      String?
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+  agency                   Agency?              @relation(fields: [agencyId], references: [id])
+  assignments              CompPlanAssignment[]
+  versions                 CompPlanVersion[]
+}
+
+model CompPlanVersion {
+  id                  String                @id @default(cuid())
+  planId              String
+  effectiveStartMonth String?
+  createdAt           DateTime              @default(now())
+  isCurrent           Boolean               @default(true)
+  bonusModules        CompPlanBonusModule[]
+  gates               CompPlanGate[]
+  ruleBlocks          CompPlanRuleBlock[]
+  plan                CompPlan              @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+}
+
+model CompPlanRuleBlock {
+  id                        String            @id @default(cuid())
+  planVersionId             String
+  name                      String
+  enabled                   Boolean           @default(true)
+  orderIndex                Int               @default(0)
+  ruleType                  CompRuleType
+  statusEligibilityOverride PolicyStatus[]
+  applyScope                CompApplyScope
+  applyFilters              Json?
+  payoutType                CompPayoutType
+  basePayoutValue           Float?
+  tierMode                  CompTierMode
+  tierBasis                 CompTierBasis?
+  bucketId                  String?
+  minThreshold              Float?
+  gateBehavior              CompGateBehavior?
+  notes                     String?
+  maxPayout                 Float?
+  version                   CompPlanVersion   @relation(fields: [planVersionId], references: [id])
+  tiers                     CompPlanTierRow[]
+
+  @@index([planVersionId])
+}
+
+model CompPlanTierRow {
+  id          String            @id @default(cuid())
+  ruleBlockId String
+  minValue    Float
+  maxValue    Float?
+  payoutValue Float
+  payoutUnit  String?
+  orderIndex  Int               @default(0)
+  ruleBlock   CompPlanRuleBlock @relation(fields: [ruleBlockId], references: [id])
+
+  @@index([ruleBlockId])
+}
+
+model CompPlanGate {
+  id             String           @id @default(cuid())
+  planVersionId  String
+  enabled        Boolean          @default(true)
+  name           String
+  gateType       CompGateType
+  bucketId       String?
+  thresholdValue Float
+  behavior       CompGateBehavior
+  scope          CompGateScope
+  ruleBlockIds   String[]
+  version        CompPlanVersion  @relation(fields: [planVersionId], references: [id])
+
+  @@index([planVersionId])
+}
+
+model CompPlanBonusModule {
+  id              String                  @id @default(cuid())
+  planVersionId   String
+  enabled         Boolean                 @default(true)
+  name            String
+  bonusType       CompBonusType
+  config          Json?
+  highestTierWins Boolean                 @default(true)
+  stackTiers      Boolean                 @default(false)
+  version         CompPlanVersion         @relation(fields: [planVersionId], references: [id])
+  scorecardTiers  CompPlanScorecardTier[]
+
+  @@index([planVersionId])
+}
+
+model CompPlanScorecardTier {
+  id                    String                       @id @default(cuid())
+  bonusModuleId         String
+  name                  String
+  orderIndex            Int                          @default(0)
+  requiresAllConditions Boolean                      @default(true)
+  conditions            CompPlanScorecardCondition[]
+  rewards               CompPlanScorecardReward[]
+  bonusModule           CompPlanBonusModule          @relation(fields: [bonusModuleId], references: [id])
+
+  @@index([bonusModuleId])
+}
+
+model CompPlanScorecardCondition {
+  id             String                @id @default(cuid())
+  tierId         String
+  metricSource   CompMetricSource
+  bucketId       String?
+  activityTypeId String?
+  operator       ConditionOperator
+  value          Float
+  statusFilter   PolicyStatus?
+  timeframe      String?
+  tier           CompPlanScorecardTier @relation(fields: [tierId], references: [id])
+
+  @@index([tierId])
+}
+
+model CompPlanScorecardReward {
+  id              String                @id @default(cuid())
+  tierId          String
+  rewardType      CompRewardType
+  bucketId        String?
+  premiumCategory PremiumCategory?
+  percentValue    Float?
+  dollarValue     Float?
+  tier            CompPlanScorecardTier @relation(fields: [tierId], references: [id])
+
+  @@index([tierId])
+}
+
+model CompPlanAssignment {
+  id                  String              @id @default(cuid())
+  planId              String
+  scopeType           CompAssignmentScope
+  scopeId             String?
+  effectiveStartMonth String?
+  active              Boolean             @default(true)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  plan                CompPlan            @relation(fields: [planId], references: [id])
+
+  @@index([planId])
+  @@index([scopeType, scopeId])
+}
+
+model CompMonthlyResult {
+  id            String   @id @default(cuid())
+  agencyId      String?
+  personId      String?
+  personName    String?
+  month         String
+  planId        String
+  planVersionId String
+  baseEarnings  Float
+  bonusEarnings Float
+  totalEarnings Float
+  bucketValues  Json
+  breakdown     Json
+  computedAt    DateTime @default(now())
+
+  @@index([personId, month])
+  @@index([planId, month])
+}
+
+model ProductionExpectation {
+  id                  String          @id @default(cuid())
+  agencyId            String?
+  roleId              String
+  lineOfBusinessId    String?
+  activityTypeId      String?
+  monthKey            String?
+  targetApps          Float?
+  targetPremium       Float?
+  targetActivityCount Float?
+  notes               String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  activityType        ActivityType?   @relation(fields: [activityTypeId], references: [id])
+  agency              Agency?         @relation(fields: [agencyId], references: [id])
+  lineOfBusiness      LineOfBusiness? @relation(fields: [lineOfBusinessId], references: [id])
+  role                Role            @relation(fields: [roleId], references: [id])
+
+  @@unique([roleId, lineOfBusinessId, activityTypeId, monthKey])
+  @@index([agencyId])
+  @@index([roleId])
+  @@index([lineOfBusinessId])
+  @@index([activityTypeId])
+}
+
+model ReportPreset {
+  id          String   @id @default(cuid())
+  agencyId    String?
+  name        String
+  description String?
+  configJson  Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  agency      Agency?  @relation(fields: [agencyId], references: [id])
+
+  @@index([agencyId])
+}
+
+enum PremiumCategory {
+  PC
+  FS
+  IPS
+}
+
+enum ProductType {
+  PERSONAL
+  BUSINESS
+}
+
+enum PolicyStatus {
+  WRITTEN
+  ISSUED
+  PAID
+  CANCELLED
+  STATUS_CHECK
+}
+
+enum TeamType {
+  SALES
+  CS
+}
+
+enum CompRuleType {
+  BASE
+  OVERRIDE
+  KICKER
+}
+
+enum CompApplyScope {
+  PRODUCT
+  LOB
+  PRODUCT_TYPE
+  PREMIUM_CATEGORY
+  BUCKET
+}
+
+enum CompPayoutType {
+  FLAT_PER_APP
+  PERCENT_OF_PREMIUM
+  FLAT_LUMP_SUM
+}
+
+enum CompTierMode {
+  NONE
+  TIERS
+}
+
+enum CompTierBasis {
+  APP_COUNT
+  PREMIUM_SUM
+  BUCKET_VALUE
+}
+
+enum CompGateType {
+  MIN_APPS
+  MIN_PREMIUM
+  MIN_BUCKET
+}
+
+enum CompGateBehavior {
+  HARD_GATE
+  RETROACTIVE
+  NON_RETROACTIVE
+}
+
+enum CompGateScope {
+  PLAN
+  RULE_BLOCKS
+  PRODUCTS
+}
+
+enum CompBonusType {
+  SCORECARD_TIER
+  GOAL_BONUS
+  ACTIVITY_BONUS
+  WTD_BONUS
+  PRODUCT_BONUS
+  CUSTOM
+}
+
+enum CompMetricSource {
+  BUCKET
+  ACTIVITY
+  WTD
+  APPS_COUNT
+  PREMIUM_CATEGORY
+}
+
+enum CompRewardType {
+  ADD_PERCENT_OF_BUCKET
+  ADD_FLAT_DOLLARS
+  MULTIPLIER
+}
+
+enum ConditionOperator {
+  GTE
+  GT
+  LTE
+  LT
+  EQ
+}
+
+enum CompAssignmentScope {
+  PERSON
+  ROLE
+  TEAM
+  TEAM_TYPE
+  AGENCY
+}
+
+enum CompPlanStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum ActivityInputMode {
+  COUNT
+  BOOLEAN
+  TEXT
+}
+
+enum ActivityGroupingHint {
+  BULK
+  PER_ENTRY
+}
+
+enum WinSourceType {
+  ACTIVITY
+  WRITTEN_APPS
+}
+
+enum CommissionScope {
+  AGENCY
+  TEAM
+  ROLE
+  PERSON
+  TEAM_TYPE
+}

@@ -1,0 +1,303 @@
+/* src/compensationBuilder/compensationBuilder.module.css */
+
+/* The only "real" class exported by this module is .icb */
+.icb {
+  --bg: #0b1020;
+  --panel: #111827;
+  --text: #f7f9fc;
+  --muted: #cfd6e3;
+  --border: rgba(255, 255, 255, 0.24);
+  --border2: rgba(255, 255, 255, 0.32);
+  --danger: #ef4444;
+  --warn: #f59e0b;
+
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+.icb :global(*) {
+  box-sizing: border-box;
+}
+
+.icb :global(code),
+.icb :global(pre),
+.icb :global(.mono) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+}
+
+.icb :global(.header) {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.icb :global(.title) {
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.icb :global(.subtitle) {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.icb :global(.status) {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.icb :global(.main) {
+  padding: 16px;
+  background: #0f172a;
+}
+
+/* Common utility classes used by PlanBuilder/StatementTester */
+.icb :global(.h2) {
+  margin: 0;
+  font-size: 18px;
+}
+
+.icb :global(.muted) {
+  color: var(--muted);
+}
+
+.icb :global(.strong) {
+  font-weight: 800;
+}
+
+.icb :global(.num) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.icb :global(.row) {
+  display: flex;
+  align-items: center;
+}
+
+.icb :global(.wrap) {
+  flex-wrap: wrap;
+}
+
+.icb :global(.gap6) {
+  gap: 6px;
+}
+.icb :global(.gap8) {
+  gap: 8px;
+}
+.icb :global(.gap10) {
+  gap: 10px;
+}
+.icb :global(.gap12) {
+  gap: 12px;
+}
+
+.icb :global(.spaceBetween) {
+  justify-content: space-between;
+}
+
+.icb :global(.grid) {
+  display: grid;
+}
+
+.icb :global(.divider) {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+  margin: 0 6px;
+}
+
+.icb :global(.pill) {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  color: #e5e7eb;
+}
+
+.icb :global(.btn) {
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.icb :global(.btn:hover) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.icb :global(.btn.primary) {
+  border-color: rgba(59, 130, 246, 0.9);
+  background: rgba(59, 130, 246, 0.35);
+}
+
+.icb :global(.btn.danger) {
+  border-color: rgba(239, 68, 68, 0.75);
+  background: rgba(239, 68, 68, 0.28);
+}
+
+.icb :global(.input),
+.icb :global(.select),
+.icb :global(.textarea) {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: #0f172a;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 10px;
+  outline: none;
+  font-size: 13px;
+}
+
+.icb :global(.textarea) {
+  width: 100%;
+  resize: vertical;
+}
+
+.icb :global(.card) {
+  background: #111827;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.icb :global(.subCard) {
+  background: #0f1628;
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.icb :global(.ruleCard) {
+  background: #0d1323;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.icb :global(.tableWrap) {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.icb :global(.table) {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 900px;
+}
+
+.icb :global(.table th),
+.icb :global(.table td) {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  color: var(--text);
+}
+
+.icb :global(.table th) {
+  text-align: left;
+  font-size: 12px;
+  color: #e5e7eb;
+  background: rgba(255, 255, 255, 0.1);
+  position: sticky;
+  top: 0;
+}
+
+.icb :global(.rowSelected) {
+  outline: 2px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.icb :global(.error) {
+  margin-top: 10px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.12);
+  padding: 10px;
+  border-radius: 12px;
+}
+
+.icb :global(.warning) {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.icb :global(.trace) {
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.16);
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.icb :global(.code) {
+  margin: 8px 0 0 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+  overflow: auto;
+}
+
+/* ConditionEditor classes (if your PlanBuilder uses them) */
+.icb :global(.condRoot) {
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
+  padding-left: 10px;
+  margin-top: 8px;
+}
+
+.icb :global(.condTitle) {
+  font-weight: 900;
+  margin-bottom: 6px;
+}
+
+.icb :global(.condGroup) {
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.icb :global(.condGroupHeader) {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.icb :global(.condGroupBody) {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.icb :global(.condLeaf) {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.10);
+}

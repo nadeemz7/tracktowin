@@ -1,0 +1,148 @@
+@import "tailwindcss";
+
+body {
+  background: #f8f9fa;
+  color: #111827;
+  font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+}
+
+a {
+  color: #283618;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  background: #f8f9fa;
+}
+
+.app-shell__sidebar {
+  background: #283618;
+  color: #f8f9fa;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 14px;
+  gap: 12px;
+  border-right: 1px solid #1f2a14;
+}
+
+.app-shell__sidebar-brand {
+  font-weight: 800;
+  font-size: 18px;
+  color: #f8f9fa;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: linear-gradient(120deg, #e31836, #a61b2a); /* State Farm red */
+  text-align: center;
+}
+
+.app-shell__sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-shell__nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: #f1f3f5;
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.app-shell__nav-link .app-shell__nav-icon {
+  width: 18px;
+}
+
+.app-shell__nav-link:hover {
+  background: #3f5f46;
+  border-color: #3f5f46;
+}
+
+.app-shell__nav-link.is-active {
+  background: #e31836;
+  border-color: #c5122d;
+  color: #fff7ec;
+}
+
+.app-shell__nav-sub {
+  margin-left: 36px;
+  display: grid;
+  gap: 4px;
+  padding: 6px 0 6px 4px;
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
+}
+
+.app-shell__nav-sub.is-open {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.app-shell__sub-link {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: #e5e7eb;
+  font-size: 14px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.app-shell__sub-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.app-shell__sub-link.is-active {
+  background: #111827;
+  color: #fff;
+}
+
+.app-shell__main {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell__page-header {
+  padding: 24px 24px 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.app-shell__title {
+  margin: 0;
+  font-size: 26px;
+  color: #283618;
+}
+
+.app-shell__subtitle {
+  margin: 6px 0 0 0;
+  color: #6b7280;
+  max-width: 900px;
+}
+
+.app-shell__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.app-shell__content {
+  padding: 0 24px 40px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.surface {
+  background: #ffffff;
+  border: 1px solid #dfe5d6; /* muted sage edge */
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 10px 30px rgba(40, 54, 24, 0.06);
+}

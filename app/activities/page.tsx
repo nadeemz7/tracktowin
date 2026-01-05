@@ -220,7 +220,7 @@ export default async function ActivityManager({
   const baseDateStr = formatISO(baseDate);
 
   const showTeamSelector = sp.viewAll === "1";
-  const cookiePersonId = readCookie("impersonatePersonId") || "";
+  const cookiePersonId = (await readCookie("impersonatePersonId")) || "";
   let people = await prisma.person.findMany({
     orderBy: { fullName: "asc" },
     include: { team: true },

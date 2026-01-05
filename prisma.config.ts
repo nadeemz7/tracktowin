@@ -11,4 +11,11 @@ export default defineConfig({
   datasource: {
     url: process.env["DATABASE_URL"],
   },
+  // Provide datasource URL here so schema can omit it; required for migrate/generate
+  datasourceUrl: process.env["DATABASE_URL"],
+  datasources: {
+    db: {
+      url: process.env["DATABASE_URL"],
+    },
+  },
 });

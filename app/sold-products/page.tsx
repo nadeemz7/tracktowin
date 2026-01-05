@@ -25,6 +25,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
   const endDefault = formatISO(new Date(), { representation: "date" });
   const startDateStr = sp.start || startDefault;
   const endDateStr = sp.end || endDefault;
+  const businessOnly = sp.businessOnly === "1";
   const statusFilter = toArray(sp.statuses ?? sp.status) as PolicyStatus[];
   const personFilter = sp.personId || "";
   const selectedLobNames = toArray(sp.lob);
@@ -302,11 +303,12 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
   }
 
   const productFilters =
-    selectedLobIds.length || selectedLobNames.length
+    selectedLobIds.length || selectedLobNames.length || businessOnly
       ? {
           product: {
             ...(selectedLobIds.length ? { lineOfBusinessId: { in: selectedLobIds } } : {}),
             ...(selectedLobNames.length ? { lineOfBusiness: { name: { in: selectedLobNames } } } : {}),
+            ...(businessOnly ? { productType: "BUSINESS" as const } : {}),
           },
         }
       : {};

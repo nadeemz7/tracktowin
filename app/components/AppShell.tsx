@@ -21,6 +21,12 @@ type NavItem = {
   children?: { href: string; label: string }[];
 };
 
+const REPORTS_CHILDREN: NavItem["children"] = [
+  { href: "/reports/policy", label: "Policy" },
+  { href: "/reports/annual", label: "Annual" },
+  { href: "/reports/roi", label: "ROI (Admin Only)" },
+].filter((item, idx, arr) => arr.findIndex((i) => i?.href === item?.href) === idx);
+
 const NAV_LINKS: NavItem[] = [
   { href: "/", label: "Home", icon: "🏠" },
   { href: "/sold-products", label: "Sold Products", icon: "📄" },
@@ -29,11 +35,7 @@ const NAV_LINKS: NavItem[] = [
     href: "/reports",
     label: "Reports",
     icon: "📊",
-    children: [
-      { href: "/reports/policy", label: "Policy" },
-      { href: "/reports/annual", label: "Annual" },
-      { href: "/reports/roi", label: "ROI" },
-    ],
+    children: REPORTS_CHILDREN,
   },
   { href: "/people", label: "People", icon: "👥" },
   { href: "/paycheck", label: "Paycheck", icon: "💵" },
@@ -46,6 +48,7 @@ const NAV_LINKS: NavItem[] = [
       { href: "/compensation/plans", label: "Compensation" },
       { href: "/admin/activities", label: "Activities" },
       { href: "/admin/win-the-day", label: "Win The Day" },
+      { href: "/admin-tools/roi-setup", label: "ROI Setup" },
     ],
   },
   { href: "/dev", label: "Dev Notes", icon: "📝" },
@@ -85,7 +88,12 @@ export function AppShell({ title, subtitle, actions, children, showAdminLink = t
       ? false // if a cookie exists but we don't yet have role info, hide admin to avoid a flash
       : impersonationChecked; // only allow by default after we've checked for cookies once
 
-  const nav = allowAdmin ? NAV_LINKS : NAV_LINKS.filter((n) => n.href !== "/admin");
+  const nav = allowAdmin
+    ? NAV_LINKS
+    : NAV_LINKS.filter((n) => n.href !== "/admin").map((n) => {
+        if (n.href !== "/reports" || !n.children) return n;
+        return { ...n, children: n.children.filter((c) => c.href !== "/reports/roi") };
+      });
 
   return (
     <div className="app-shell">

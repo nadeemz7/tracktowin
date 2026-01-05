@@ -173,6 +173,9 @@ export default async function ProductTrendsPage({ searchParams }: { searchParams
           <label style={{ display: "grid", gap: 4, width: 140, fontSize: 13 }}>
             <span style={{ fontWeight: 600, fontSize: 12 }}>Top N</span>
             <input type="number" name="top" defaultValue={topN} className="input" min={1} style={{ minHeight: 34 }} />
+            <span style={{ fontSize: 11, color: "#6b7280" }}>
+              Top N = show the top N products ranked by the selected metric over the selected time range (others grouped as “Other”).
+            </span>
           </label>
 
           <label style={{ display: "grid", gap: 4, minWidth: 220, fontSize: 13 }}>

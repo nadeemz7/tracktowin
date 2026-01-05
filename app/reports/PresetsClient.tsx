@@ -3,7 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { Chart } from "@/components/Chart";
 import type { EChartsOption } from "echarts";
-import { addMonths, endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subMonths, subWeeks } from "date-fns";
+import {
+  addMonths,
+  differenceInCalendarDays,
+  endOfMonth,
+  endOfWeek,
+  format,
+  startOfMonth,
+  startOfWeek,
+  subDays,
+  subMonths,
+  subWeeks,
+} from "date-fns";
+import { deriveEffectiveRange, type Granularity } from "@/lib/reports/deriveEffectiveRange";
+import { CANONICAL_LOB_ORDER, normalizeLobName, lobToCategory } from "@/lib/reports/lob";
 
 type ProductionResponse = {
   labels: string[];
@@ -67,7 +80,9 @@ type ProductionResponse = {
     }[];
   };
 };
+
 type LobByAgencySeries = { agencyId: string; agencyName: string; apps: number[]; premium: number[] };
+
 async function fetchProduction(params: Record<string, unknown>) {
   const res = await fetch("/api/reports/production", {
     method: "POST",
@@ -149,7 +164,16 @@ function RangeOverlay({ start, end, onChange, onClose, onClear }: RangeOverlayPr
   const renderMonth = (days: Date[]) => (
     <div style={{ minWidth: 240 }}>
       <div style={{ textAlign: "center", fontWeight: 700, marginBottom: 6 }}>{format(days[0], "MMMM yyyy")}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, 1fr)",
+          gap: 4,
+          fontSize: 12,
+          color: "#94a3b8",
+          marginBottom: 4,
+        }}
+      >
         {["S", "M", "T", "W", "T", "F", "S"].map((d) => (
           <div key={d} style={{ textAlign: "center" }}>
             {d}
@@ -252,6 +276,42 @@ const CHARTS = [
   { id: "lobCards", label: "LoB overview (cards)" },
 ] as const;
 
+// QA checklist:
+// - Trend mode persistence (refresh and confirm)
+// - Group toggles persistence (refresh and confirm)
+// - Product Mix updates with Apps/Premium toggle
+// - Top Movers updates with Apps/Premium + date range
+// - Copy CSV works (and failure message on denied clipboard)
+
+const CHART_GROUP_STORAGE_KEY = "ttw:production:chartGroups:v1";
+const TREND_MODE_STORAGE_KEY = "ttw:production:trendMode:v1";
+const CHART_GROUPS = [
+  { id: "exec", label: "Executive Summary", description: "KPIs and headline ratios." },
+  { id: "trend", label: "Trend", description: "Time-series performance view." },
+  { id: "mix", label: "Mix & Share", description: "Product and line-of-business mix." },
+  { id: "people", label: "People / Leaderboard", description: "Top sellers and LoB cards." },
+  { id: "drilldowns", label: "Drilldowns", description: "Detail comparisons and drilldowns." },
+] as const;
+
+type ChartGroupId = (typeof CHART_GROUPS)[number]["id"];
+
+const DEFAULT_CHART_GROUPS: Record<ChartGroupId, boolean> = {
+  exec: true,
+  trend: true,
+  mix: true,
+  people: true,
+  drilldowns: true,
+};
+
+const CHART_GROUP_MAP: Record<string, ChartGroupId> = {
+  trend: "trend",
+  products: "mix",
+  lob: "mix",
+  lobOverview: "drilldowns",
+  lobByAgencyGroup: "drilldowns",
+  lobCards: "people",
+};
+
 const DEFAULT_STATUSES = ["WRITTEN", "ISSUED", "PAID"];
 const LOB_ORDER = ["Auto", "Fire", "Life", "Health", "IPS"] as const;
 const LOB_COLORS: Record<string, string> = {
@@ -265,7 +325,14 @@ const LOB_COLORS: Record<string, string> = {
 
 type AgencyOption = { id: string; name: string };
 
-export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[] }) {
+export function PresetProductionOverview({
+  agencies,
+  variant = "full",
+}: {
+  agencies: AgencyOption[];
+  variant?: "full" | "inline";
+}) {
+  const compact = variant === "inline";
   const [metric, setMetric] = useState<"premium" | "apps">("premium");
   const [selectedCharts, setSelectedCharts] = useState<string[]>(CHARTS.map((c) => c.id));
   const [granularity, setGranularity] = useState<"month" | "week">("month");
@@ -276,11 +343,22 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
   const [customEnd, setCustomEnd] = useState<string>("");
   const [showRangePicker, setShowRangePicker] = useState<boolean>(false);
   const [lobTrendSelection, setLobTrendSelection] = useState<string>("");
+  const [enableChartDrilldown, setEnableChartDrilldown] = useState<boolean>(true);
 
   const [trend, setTrend] = useState<ProductionResponse>({ labels: [], series: [] });
   const [products, setProducts] = useState<ProductionResponse>({ labels: [], series: [] });
   const [lob, setLob] = useState<ProductionResponse>({ labels: [], series: [] });
-  const [trendGroups, setTrendGroups] = useState<{ pc: boolean; fs: boolean; ips: boolean }>({ pc: true, fs: true, ips: false });
+  const [previousLob, setPreviousLob] = useState<ProductionResponse | null>(null);
+  const [trendGroups, setTrendGroups] = useState<{ pc: boolean; fs: boolean; ips: boolean }>({
+    pc: true,
+    fs: true,
+    ips: false,
+  });
+  const [trendMode, setTrendMode] = useState<"raw" | "grouped">("grouped");
+  const [trendModeFallback, setTrendModeFallback] = useState<boolean>(false);
+  const [topMoversCopied, setTopMoversCopied] = useState<boolean>(false);
+  const [topMoversCopyError, setTopMoversCopyError] = useState<boolean>(false);
+  const [chartGroups, setChartGroups] = useState<Record<ChartGroupId, boolean>>(() => ({ ...DEFAULT_CHART_GROUPS }));
 
   const rangeSelection = useMemo(() => {
     const now = new Date();
@@ -306,14 +384,123 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
   }, [agencies, agencyFilter.length]);
 
   useEffect(() => {
-    const { start, end, ready } = rangeSelection;
-    if (rangeMode === "custom" && !ready) return;
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(CHART_GROUP_STORAGE_KEY);
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as Partial<Record<ChartGroupId, boolean>>;
+      setChartGroups((prev) => {
+        const next = { ...prev };
+        CHART_GROUPS.forEach((g) => {
+          if (typeof parsed[g.id] === "boolean") next[g.id] = parsed[g.id] as boolean;
+        });
+        return next;
+      });
+    } catch {
+      // ignore storage parse errors
+    }
+  }, []);
 
-    const base = { agencyIds: agencyFilter.length ? agencyFilter : undefined, granularity, start, end, metric };
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(TREND_MODE_STORAGE_KEY);
+    if (stored === "raw" || stored === "grouped") {
+      setTrendMode(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TREND_MODE_STORAGE_KEY, trendMode);
+  }, [trendMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(CHART_GROUP_STORAGE_KEY, JSON.stringify(chartGroups));
+  }, [chartGroups]);
+
+  const monthFocusedRange = useMemo(() => {
+    if (!monthFilter) return null;
+    const base = new Date(`${monthFilter}-01`);
+    if (Number.isNaN(base.getTime())) return null;
+    return { start: formatISODate(startOfMonth(base)), end: formatISODate(endOfMonth(base)) };
+  }, [monthFilter]);
+
+  const comparisonRanges = useMemo(() => {
+    if (monthFocusedRange?.start && monthFocusedRange?.end) {
+      const currentStart = new Date(monthFocusedRange.start);
+      if (!Number.isNaN(currentStart.getTime())) {
+        const previousStart = startOfMonth(subMonths(currentStart, 1));
+        const previousEnd = endOfMonth(previousStart);
+        return {
+          current: monthFocusedRange,
+          previous: { start: formatISODate(previousStart), end: formatISODate(previousEnd) },
+        };
+      }
+    }
+
+    if (rangeMode === "custom" && !rangeSelection.ready) return null;
+
+    if (rangeSelection.start && rangeSelection.end) {
+      const currentStart = new Date(rangeSelection.start);
+      const currentEnd = new Date(rangeSelection.end);
+      if (!Number.isNaN(currentStart.getTime()) && !Number.isNaN(currentEnd.getTime())) {
+        const durationDays = Math.max(1, differenceInCalendarDays(currentEnd, currentStart) + 1);
+        const previousEnd = subDays(currentStart, 1);
+        const previousStart = subDays(previousEnd, durationDays - 1);
+        return {
+          current: { start: formatISODate(currentStart), end: formatISODate(currentEnd) },
+          previous: { start: formatISODate(previousStart), end: formatISODate(previousEnd) },
+        };
+      }
+    }
+
+    const lastFullMonthStart = startOfMonth(subMonths(new Date(), 1));
+    const lastFullMonthEnd = endOfMonth(lastFullMonthStart);
+    const previousMonthStart = startOfMonth(subMonths(lastFullMonthStart, 1));
+    const previousMonthEnd = endOfMonth(previousMonthStart);
+    return {
+      current: { start: formatISODate(lastFullMonthStart), end: formatISODate(lastFullMonthEnd) },
+      previous: { start: formatISODate(previousMonthStart), end: formatISODate(previousMonthEnd) },
+    };
+  }, [monthFocusedRange, rangeMode, rangeSelection.start, rangeSelection.end, rangeSelection.ready]);
+
+  const prevRange = comparisonRanges?.previous;
+  const prevStart = prevRange?.start;
+  const prevEnd = prevRange?.end;
+  const hasPrevRange = Boolean(prevStart && prevEnd);
+
+  useEffect(() => {
+    const { start, end, ready } = rangeSelection;
+    if (rangeMode === "custom" && !ready && !monthFocusedRange) return;
+
+    const effectiveRange = monthFocusedRange ?? { start, end };
+    const base = {
+      agencyIds: agencyFilter.length ? agencyFilter : undefined,
+      granularity,
+      start: effectiveRange.start,
+      end: effectiveRange.end,
+      metric,
+    };
     fetchProduction({ ...base, dimension: "agency" }).then(setTrend);
     fetchProduction({ ...base, dimension: "product" }).then(setProducts);
     fetchProduction({ ...base, dimension: "lob" }).then(setLob);
-  }, [agencyFilter, granularity, rangeMode, customStart, customEnd, metric, rangeSelection]);
+  }, [agencyFilter, granularity, rangeMode, customStart, customEnd, metric, rangeSelection, monthFocusedRange]);
+
+  useEffect(() => {
+    if (!prevStart || !prevEnd) {
+      setPreviousLob(null);
+      return;
+    }
+    const base = {
+      agencyIds: agencyFilter.length ? agencyFilter : undefined,
+      granularity,
+      start: prevStart,
+      end: prevEnd,
+      metric,
+    };
+    fetchProduction({ ...base, dimension: "lob" }).then(setPreviousLob);
+  }, [agencyFilter, granularity, metric, prevStart, prevEnd]);
 
   const monthOptions = useMemo(() => trend.labels, [trend.labels]);
 
@@ -349,6 +536,84 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
   const lobOverviewCards = lob.lobOverview?.cards ?? [];
   const lobCardsData = lob.lobCards ?? null;
 
+  // DO NOT BREAK:
+  // - aggregatedTrend must stay wired for grouped trend and Product Mix rendering.
+  // - trendMode fallback relies on aggregatedTrend being null/available.
+  const aggregatedTrend = useMemo(() => {
+    const source = trendFiltered.trendByAgencyCategory;
+    if (!source?.labels?.length || !source.series?.length) return null;
+    const labels = source.labels;
+    const categories = ["PC", "FS", "IPS"] as const;
+    const totals: Record<"PC" | "FS" | "IPS", { apps: number[]; premium: number[] }> = {
+      PC: { apps: Array(labels.length).fill(0), premium: Array(labels.length).fill(0) },
+      FS: { apps: Array(labels.length).fill(0), premium: Array(labels.length).fill(0) },
+      IPS: { apps: Array(labels.length).fill(0), premium: Array(labels.length).fill(0) },
+    };
+
+    source.series.forEach((entry) => {
+      const category = entry.category as "PC" | "FS" | "IPS";
+      const bucket = totals[category];
+      if (!bucket) return;
+      entry.apps.forEach((val, idx) => {
+        bucket.apps[idx] = (bucket.apps[idx] ?? 0) + (val ?? 0);
+      });
+      entry.premium.forEach((val, idx) => {
+        bucket.premium[idx] = (bucket.premium[idx] ?? 0) + (val ?? 0);
+      });
+    });
+
+    return {
+      labels,
+      series: categories.map((category) => ({
+        category,
+        apps: totals[category].apps,
+        premium: totals[category].premium,
+      })),
+    };
+  }, [trendFiltered.trendByAgencyCategory]);
+
+  useEffect(() => {
+    if (trendMode === "grouped" && !aggregatedTrend) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          "[Production Overview] Grouped trend selected but aggregatedTrend is null; falling back to raw."
+        );
+      }
+      // Guard against grouped mode without data; switch once to avoid loops.
+      setTrendMode("raw");
+      setTrendModeFallback(true);
+    }
+  }, [trendMode, aggregatedTrend]);
+
+  useEffect(() => {
+    if (trendModeFallback && aggregatedTrend) {
+      // Clear the fallback note once grouped data is available again.
+      setTrendModeFallback(false);
+    }
+  }, [trendModeFallback, aggregatedTrend]);
+
+  const productMixData = useMemo(() => {
+    // No data to chart yet; return null so the placeholder renders instead.
+    if (!aggregatedTrend?.labels?.length || !aggregatedTrend.series?.length) return null;
+    const labelMap: Record<"PC" | "FS" | "IPS", string> = { PC: "P&C", FS: "FS", IPS: "IPS" };
+    const colorMap: Record<"PC" | "FS" | "IPS", string> = { PC: "#1D4ED8", FS: "#C2410C", IPS: "#7C3AED" };
+    const series = aggregatedTrend.series
+      .map((entry) => {
+        const values = metric === "apps" ? entry.apps : entry.premium;
+        return {
+          name: labelMap[entry.category],
+          type: "bar",
+          stack: "mix",
+          itemStyle: { color: colorMap[entry.category] },
+          data: values.map((v) => v ?? 0),
+        };
+      })
+      .filter((s) => s.data.some((v) => v !== 0));
+
+    if (!series.length) return null;
+    return { labels: aggregatedTrend.labels, series };
+  }, [aggregatedTrend, metric]);
+
   useEffect(() => {
     if (!lobCardsData?.lobNames?.length) return;
     setLobTrendSelection((prev) => {
@@ -357,84 +622,285 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
     });
   }, [lobCardsData?.lobNames]);
 
-  // Aggregate agency trend into P&C vs FS (and optional IPS) so the line chart is more meaningful.
-  const aggregatedTrend = useMemo(() => {
-    if (!lobFiltered.labels.length) return null;
+  
+  const getUnifiedTotals = () => {
+    const preferTotals = lobFiltered.totals ?? trendFiltered.totals ?? productsFiltered.totals;
 
-    const labels = lobFiltered.labels;
-    const empty = () => Array(labels.length).fill(0);
-    const buckets = { pc: empty(), fs: empty(), ips: empty() };
-
-    lobFiltered.series.forEach((s) => {
-      const name = s.name.toLowerCase();
-      let bucket: "pc" | "fs" | "ips" = "ips";
-      if (name.includes("auto") || name.includes("fire") || name.includes("p&c") || name.includes("pc")) bucket = "pc";
-      else if (name.includes("health") || name.includes("life") || name.includes("fs")) bucket = "fs";
-      else bucket = "ips";
-      s.data.forEach((v, idx) => {
-        buckets[bucket][idx] += v ?? 0;
-      });
-    });
-
-    const series: { name: string; data: number[] }[] = [];
-    if (trendGroups.pc && buckets.pc.some((v) => v !== 0))
-      series.push({ name: metric === "premium" ? "P&C premium" : "P&C apps", data: buckets.pc });
-    if (trendGroups.fs && buckets.fs.some((v) => v !== 0))
-      series.push({ name: metric === "premium" ? "FS premium" : "FS apps", data: buckets.fs });
-    if (trendGroups.ips && buckets.ips.some((v) => v !== 0))
-      series.push({ name: metric === "premium" ? "IPS premium" : "IPS apps", data: buckets.ips });
-
-    if (!series.length) return null;
-    return { labels, series };
-  }, [lobFiltered, trendGroups, metric]);
-
-  const kpiTotals = useMemo(() => {
-    // prefer the API totals if present; otherwise derive from whichever dataset we have
-    const pickTotals = (d: ProductionResponse | undefined) => d?.totals;
-    const totals =
-      pickTotals(trendFiltered) ??
-      pickTotals(productsFiltered) ??
-      pickTotals(lobFiltered);
-
-    if (totals) {
+    if (preferTotals) {
       return {
-        total: metric === "premium" ? totals.premium ?? 0 : totals.apps ?? 0,
-        business: metric === "premium" ? totals.businessPremium ?? 0 : 0,
+        totalPremium: preferTotals.premium ?? 0,
+        totalApps: preferTotals.apps ?? 0,
+        businessPremium: preferTotals.businessPremium ?? 0,
       };
     }
 
-    const sumFromSeries = (d: ProductionResponse) =>
-      d.series.reduce(
-        (acc, s) => {
-          const sum = s.data.reduce((a, b) => a + b, 0);
-          acc.total += sum;
-          if (s.name.toLowerCase().includes("business")) acc.business += sum;
-          return acc;
-        },
-        { total: 0, business: 0 }
-      );
+    const fallback = lobFiltered.labels.length ? lobFiltered : trendFiltered.labels.length ? trendFiltered : productsFiltered;
+    if (!fallback || !fallback.series?.length) {
+      return { totalPremium: 0, totalApps: 0, businessPremium: 0 };
+    }
+    // Series data reflects the active metric only; sum what we have.
+    const summed = fallback.series.reduce(
+      (acc, s) => {
+        const sum = s.data.reduce((a, b) => a + b, 0);
+        acc.total += sum;
+        if (s.name.toLowerCase().includes("business")) acc.business += sum;
+        return acc;
+      },
+      { total: 0, business: 0 }
+    );
 
-    // fall back in order of richness
-    const derived =
-      sumFromSeries(trendFiltered).total > 0
-        ? sumFromSeries(trendFiltered)
-        : sumFromSeries(lobFiltered);
+    return {
+      totalPremium: metric === "premium" ? summed.total : 0,
+      totalApps: metric === "apps" ? summed.total : 0,
+      businessPremium: metric === "premium" ? summed.business : 0,
+    };
+  };
 
-    return derived;
-  }, [trendFiltered, productsFiltered, lobFiltered, metric]);
+  const unifiedTotals = useMemo(() => getUnifiedTotals(), [metric, lobFiltered, trendFiltered, productsFiltered]);
+  const kpiTotals = useMemo(
+    () => ({
+      total: metric === "premium" ? unifiedTotals.totalPremium : unifiedTotals.totalApps,
+      business: metric === "premium" ? unifiedTotals.businessPremium ?? 0 : 0,
+    }),
+    [metric, unifiedTotals]
+  );
+
+  const previousTotals = useMemo(() => {
+    const totals = previousLob?.totals;
+    return {
+      totalPremium: totals?.premium ?? 0,
+      totalApps: totals?.apps ?? 0,
+      businessPremium: totals?.businessPremium ?? 0,
+    };
+  }, [previousLob]);
+
+  const previousKpiTotals = useMemo(
+    () => ({
+      total: metric === "premium" ? previousTotals.totalPremium : previousTotals.totalApps,
+      business: metric === "premium" ? previousTotals.businessPremium ?? 0 : 0,
+    }),
+    [metric, previousTotals]
+  );
+
+  const computeCategoryTotals = (lobCards: ProductionResponse["lobCards"] | null | undefined) => {
+    if (!lobCards?.byLob?.length) {
+      return {
+        pcPremium: 0,
+        fsPremium: 0,
+        ipsPremium: 0,
+        pcLobs: [] as string[],
+        fsLobs: [] as string[],
+        ipsLobs: [] as string[],
+      };
+    }
+
+    const pcLobs = new Set<string>();
+    const fsLobs = new Set<string>();
+    const ipsLobs = new Set<string>();
+    let pcPremium = 0;
+    let fsPremium = 0;
+    let ipsPremium = 0;
+
+    lobCards.byLob.forEach((entry) => {
+      const canon = normalizeLobName(entry.lobName);
+      const category = canon ? lobToCategory(canon) : entry.premiumCategory;
+      const premium = entry.totalsAllAgencies?.premium ?? 0;
+      if (category === "PC") {
+        pcPremium += premium;
+        pcLobs.add(entry.lobName);
+      } else if (category === "FS") {
+        fsPremium += premium;
+        fsLobs.add(entry.lobName);
+      } else {
+        ipsPremium += premium;
+        ipsLobs.add(entry.lobName);
+      }
+    });
+
+    return {
+      pcPremium,
+      fsPremium,
+      ipsPremium,
+      pcLobs: Array.from(pcLobs),
+      fsLobs: Array.from(fsLobs),
+      ipsLobs: Array.from(ipsLobs),
+    };
+  };
+
+  const categoryTotals = useMemo(() => computeCategoryTotals(lobCardsData), [lobCardsData]);
+  const previousCategoryTotals = useMemo(() => computeCategoryTotals(previousLob?.lobCards), [previousLob?.lobCards]);
+
+  const totalPremium = unifiedTotals.totalPremium ?? 0;
+  const totalApps = unifiedTotals.totalApps ?? 0;
+  const businessPremium = unifiedTotals.businessPremium ?? 0;
+
+  const avgPremiumPerApp = totalApps ? totalPremium / totalApps : 0;
+  const businessPremiumShare = totalPremium ? (businessPremium / totalPremium) * 100 : 0;
+
+  const pcFsPremiumTotal = categoryTotals.pcPremium + categoryTotals.fsPremium;
+  const pcShare = pcFsPremiumTotal ? (categoryTotals.pcPremium / pcFsPremiumTotal) * 100 : 0;
+  const fsShare = pcFsPremiumTotal ? (categoryTotals.fsPremium / pcFsPremiumTotal) * 100 : 0;
+  const pcLobParam = categoryTotals.pcLobs.length ? categoryTotals.pcLobs.join(",") : "";
+  const fsLobParam = categoryTotals.fsLobs.length ? categoryTotals.fsLobs.join(",") : "";
+
+  const previousTotalPremium = previousTotals.totalPremium ?? 0;
+  const previousTotalApps = previousTotals.totalApps ?? 0;
+  const previousBusinessPremium = previousTotals.businessPremium ?? 0;
+
+  const previousAvgPremiumPerApp = previousTotalApps ? previousTotalPremium / previousTotalApps : 0;
+  const previousBusinessPremiumShare = previousTotalPremium ? (previousBusinessPremium / previousTotalPremium) * 100 : 0;
+
+  const previousPcFsPremiumTotal = previousCategoryTotals.pcPremium + previousCategoryTotals.fsPremium;
+  const previousPcShare = previousPcFsPremiumTotal ? (previousCategoryTotals.pcPremium / previousPcFsPremiumTotal) * 100 : 0;
+  const previousFsShare = previousPcFsPremiumTotal ? (previousCategoryTotals.fsPremium / previousPcFsPremiumTotal) * 100 : 0;
+
+  const previousPcLobParam = previousCategoryTotals.pcLobs.length ? previousCategoryTotals.pcLobs.join(",") : "";
+  const previousFsLobParam = previousCategoryTotals.fsLobs.length ? previousCategoryTotals.fsLobs.join(",") : "";
+
+  const topMoversRows = useMemo(() => {
+    // If the previous period is missing, show "No data" without throwing.
+    if (!hasPrevRange) return null;
+    if (!lobCardsData?.byLob?.length || !previousLob?.lobCards?.byLob?.length) return null;
+    const allowedAgencies = agencyFilter.length ? new Set(agencyFilter) : null;
+
+    const buildTotals = (lobCards: ProductionResponse["lobCards"]) => {
+      const totals = new Map<string, { apps: number; premium: number }>();
+      lobCards.byLob.forEach((entry) => {
+        entry.totalsByAgency.forEach((agency) => {
+          if (allowedAgencies && !allowedAgencies.has(agency.agencyId)) return;
+          agency.topSellers.forEach((seller) => {
+            const current = totals.get(seller.personName) || { apps: 0, premium: 0 };
+            current.apps += seller.apps ?? 0;
+            current.premium += seller.premium ?? 0;
+            totals.set(seller.personName, current);
+          });
+        });
+      });
+      return totals;
+    };
+
+    const currentTotals = buildTotals(lobCardsData);
+    const previousTotals = buildTotals(previousLob.lobCards);
+    const names = new Set([...currentTotals.keys(), ...previousTotals.keys()]);
+
+    const rows = Array.from(names)
+      .map((personName) => {
+        const current = currentTotals.get(personName) || { apps: 0, premium: 0 };
+        const previous = previousTotals.get(personName) || { apps: 0, premium: 0 };
+        const currentValue = metric === "premium" ? current.premium : current.apps;
+        const previousValue = metric === "premium" ? previous.premium : previous.apps;
+        const delta = currentValue - previousValue;
+        const pct = previousValue ? (delta / previousValue) * 100 : null;
+        return { personName, currentValue, previousValue, delta, pct };
+      })
+      .filter((row) => row.currentValue !== 0 || row.previousValue !== 0);
+
+    return rows;
+  }, [agencyFilter, hasPrevRange, lobCardsData, metric, previousLob]);
+
+  const topMoversIncreases = useMemo(() => {
+    if (!topMoversRows?.length) return [];
+    return topMoversRows
+      .filter((r) => r.delta > 0)
+      .sort((a, b) => b.delta - a.delta)
+      .slice(0, 5);
+  }, [topMoversRows]);
+
+  const topMoversDecreases = useMemo(() => {
+    if (!topMoversRows?.length) return [];
+    return topMoversRows
+      .filter((r) => r.delta < 0)
+      .sort((a, b) => a.delta - b.delta)
+      .slice(0, 5);
+  }, [topMoversRows]);
+
+  const topMovers = useMemo(() => {
+    if (!topMoversIncreases.length && !topMoversDecreases.length) return null;
+    return { increases: topMoversIncreases, decreases: topMoversDecreases };
+  }, [topMoversIncreases, topMoversDecreases]);
+
+  const topMoversCsv = useMemo(() => {
+    if (!topMovers) return "";
+    const lines = ["section,person,current,previous,delta,deltaPercent"];
+    const pushRows = (section: string, rows: typeof topMoversIncreases) => {
+      rows.forEach((row) => {
+        const pct = row.pct === null ? "" : row.pct.toFixed(1);
+        lines.push(
+          [
+            section,
+            `"${row.personName.replace(/\"/g, '""')}"`,
+            row.currentValue.toFixed(2),
+            row.previousValue.toFixed(2),
+            row.delta.toFixed(2),
+            pct,
+          ].join(",")
+        );
+      });
+    };
+    pushRows("increase", topMoversIncreases);
+    pushRows("decrease", topMoversDecreases);
+    return lines.join("\n");
+  }, [topMovers, topMoversIncreases, topMoversDecreases]);
+
+  const copyTopMoversCsv = async () => {
+    if (!topMoversCsv) return;
+    try {
+      await navigator.clipboard.writeText(topMoversCsv);
+      setTopMoversCopyError(false);
+      setTopMoversCopied(true);
+      window.setTimeout(() => setTopMoversCopied(false), 2000);
+    } catch {
+      // Clipboard access can be blocked; surface a small inline error.
+      setTopMoversCopied(false);
+      setTopMoversCopyError(true);
+      window.setTimeout(() => setTopMoversCopyError(false), 2000);
+    }
+  };
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const sumLobCards = () => {
+      if (!lobCardsData?.byLob?.length) return null;
+      const premium = lobCardsData.byLob.reduce((acc, entry) => acc + (entry.totalsAllAgencies.premium ?? 0), 0);
+      const apps = lobCardsData.byLob.reduce((acc, entry) => acc + (entry.totalsAllAgencies.apps ?? 0), 0);
+      return { premium, apps };
+    };
+    const sumLobByAgency = () => {
+      if (!lob.lobByAgency?.series?.length) return null;
+      const premium = lob.lobByAgency.series.reduce((acc, s) => acc + s.premium.reduce((a, b) => a + (b ?? 0), 0), 0);
+      const apps = lob.lobByAgency.series.reduce((acc, s) => acc + s.apps.reduce((a, b) => a + (b ?? 0), 0), 0);
+      return { premium, apps };
+    };
+    const cards = sumLobCards();
+    const lobByAgencyTotals = sumLobByAgency();
+    if (!cards || !lobByAgencyTotals) return;
+    const premiumDiff = Math.abs(cards.premium - lobByAgencyTotals.premium);
+    const appsDiff = Math.abs(cards.apps - lobByAgencyTotals.apps);
+    if (premiumDiff > 5 || appsDiff > 1) {
+      console.warn("[TotalsMismatch]", { cards, lobByAgencyTotals, premiumDiff, appsDiff });
+    }
+  }, [lobCardsData, lob.lobByAgency]);
 
   const statusesParam = lob.statuses?.length ? lob.statuses.join(",") : "";
   const navStatuses = useMemo(
     () => (statusesParam ? statusesParam.split(",").filter(Boolean) : DEFAULT_STATUSES),
     [statusesParam]
   );
-  const agenciesParam = useMemo(() => (agencyFilter.length ? agencyFilter : agencies.map((a) => a.id)), [agencyFilter, agencies]);
+
+  const agenciesParam = useMemo(
+    () => (agencyFilter.length ? agencyFilter : agencies.map((a) => a.id)),
+    [agencyFilter, agencies]
+  );
+
+  const isSingleAgencyView = (agenciesParam?.length ?? 0) <= 1;
+
   const parseLabelToDate = (label: string | undefined) => {
     if (!label) return null;
     const normalized = label.length === 7 ? `${label}-01` : label;
     const parsed = new Date(normalized);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
+
   const rangeFromLabels = (labels: string[] | undefined, grain: "month" | "week") => {
     if (!labels?.length) return null;
     const first = parseLabelToDate(labels[0]);
@@ -444,6 +910,7 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
     const normalizedEnd = grain === "week" ? endOfWeek(last) : endOfMonth(last);
     return { start: formatISODate(normalizedStart), end: formatISODate(normalizedEnd) };
   };
+
   const deriveRangeParams = () => {
     if (rangeSelection.start && rangeSelection.end) return { start: rangeSelection.start, end: rangeSelection.end };
     const fromLobLabels = rangeFromLabels(lob.labels, granularity);
@@ -453,7 +920,9 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
     const today = new Date();
     return { start: formatISODate(startOfMonth(today)), end: formatISODate(endOfMonth(today)) };
   };
+
   const currentRangeParams = deriveRangeParams();
+
   const deriveRangeFromLabels = (labels: string[] | undefined) => {
     if (!labels?.length) return null;
     const first = labels[0];
@@ -472,6 +941,7 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
     }
     return null;
   };
+
   const rangeShown = useMemo(() => {
     if (currentRangeParams.start || currentRangeParams.end) return currentRangeParams;
     if (rangeSelection.start || rangeSelection.end) return { start: rangeSelection.start, end: rangeSelection.end };
@@ -481,77 +951,496 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
     if (fromTrendLabels) return fromTrendLabels;
     return { start: undefined as string | undefined, end: undefined as string | undefined };
   }, [currentRangeParams, rangeSelection.start, rangeSelection.end, lob.labels, trendFiltered.labels]);
-  function goToSoldProducts(args: {
+
+  const navigationRange = useMemo(
+    () =>
+      deriveEffectiveRange({
+        start: customStart || undefined,
+        end: customEnd || undefined,
+        monthFilter: monthFilter || undefined,
+        labels: lob.labels,
+        granularity,
+      }),
+    [customStart, customEnd, monthFilter, lob.labels, granularity]
+  );
+
+  const navStart = navigationRange.start ?? rangeShown.start;
+  const navEnd = navigationRange.end ?? rangeShown.end;
+
+  const categoryLobMap = useMemo(() => {
+    const map: Record<"PC" | "FS" | "IPS", Set<string>> = {
+      PC: new Set(categoryTotals.pcLobs),
+      FS: new Set(categoryTotals.fsLobs),
+      IPS: new Set(categoryTotals.ipsLobs),
+    };
+    (lobFiltered.series ?? []).forEach((series) => {
+      const canon = normalizeLobName(series.name);
+      const category = canon ? lobToCategory(canon) : null;
+      if (category) map[category].add(series.name);
+    });
+    return {
+      PC: Array.from(map.PC),
+      FS: Array.from(map.FS),
+      IPS: Array.from(map.IPS),
+    };
+  }, [categoryTotals.pcLobs, categoryTotals.fsLobs, categoryTotals.ipsLobs, lobFiltered.series]);
+
+  // DO NOT BREAK:
+  // - all drilldowns must route through buildSoldProductsUrl for consistent params.
+  const buildSoldProductsUrl = (args: {
     lobName?: string;
+    category?: "PC" | "FS" | "IPS";
     agencyIds?: string[];
     start?: string;
     end?: string;
     statuses?: string[];
     personId?: string;
     productIds?: string[];
-  }) {
+    labels?: string[];
+    granularity?: Granularity;
+    customStart?: string;
+    customEnd?: string;
+    monthFilter?: string;
+    businessOnly?: boolean;
+  }) => {
+    const { start: effStart, end: effEnd } = deriveEffectiveRange({
+      start: args.customStart,
+      end: args.customEnd,
+      monthFilter: args.monthFilter,
+      labels: args.labels,
+      granularity: args.granularity,
+    });
+    const effectiveStart = args.start ?? effStart;
+    const effectiveEnd = args.end ?? effEnd;
+
     const qs = new URLSearchParams();
-    if (args.start) qs.set("start", args.start);
-    if (args.end) qs.set("end", args.end);
+    if (effectiveStart) qs.set("start", effectiveStart);
+    if (effectiveEnd) qs.set("end", effectiveEnd);
     if (args.agencyIds?.length) qs.set("agencies", args.agencyIds.join(","));
     if (args.statuses?.length) qs.set("statuses", args.statuses.join(","));
-    if (args.lobName) qs.set("lob", args.lobName);
+    let lobParam = args.lobName;
+    if (!lobParam && args.category) {
+      const lobsForCategory = categoryLobMap[args.category] ?? [];
+      if (!lobsForCategory.length) return null;
+      lobParam = lobsForCategory.join(",");
+    }
+    if (lobParam) qs.set("lob", lobParam);
     if (args.personId) qs.set("personId", args.personId);
     if (args.productIds?.length) qs.set("products", args.productIds.join(","));
-    window.location.href = `/sold-products?${qs.toString()}`;
-  }
+    if (args.businessOnly) qs.set("businessOnly", "1");
 
+    if (process.env.NODE_ENV !== "production" && (!effectiveStart || !effectiveEnd)) {
+      console.warn("[Production Overview] Drilldown URL built without date range", args);
+    }
+
+    return `/sold-products?${qs.toString()}`;
+  };
+
+  const goToSoldProducts = (args: Parameters<typeof buildSoldProductsUrl>[0]) => {
+    const url = buildSoldProductsUrl(args);
+    if (!url) return;
+    window.location.href = url;
+  };
+
+  const goToPrevSoldProducts = (overrides: Partial<Parameters<typeof goToSoldProducts>[0]> = {}) => {
+    if (!prevStart || !prevEnd) return;
+    goToSoldProducts({
+      agencyIds: agenciesParam,
+      statuses: navStatuses,
+      start: prevStart,
+      end: prevEnd,
+      ...overrides,
+    });
+  };
+
+  const categoryFromSeriesName = (seriesName?: string): "PC" | "FS" | "IPS" | undefined => {
+    if (!seriesName) return undefined;
+    if (seriesName === "P&C" || seriesName === "PC") return "PC";
+    if (seriesName === "FS") return "FS";
+    if (seriesName === "IPS") return "IPS";
+    return undefined;
+  };
+
+  const prevButtonStyle: React.CSSProperties = {
+    padding: 0,
+    border: "none",
+    background: "none",
+    fontSize: 12,
+    fontWeight: 600,
+  };
+
+  const formatSignedMetricValue = (value: number, mode: "premium" | "apps") => {
+    const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+    const rounded = Math.round(Math.abs(value));
+    return `${sign}${mode === "premium" ? `$${rounded}` : rounded}`;
+  };
+
+  const formatSignedPercent = (value: number) => {
+    const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+    return `${sign}${Math.abs(value).toFixed(1)}%`;
+  };
+
+  const formatSignedPoints = (value: number) => {
+    const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+    return `${sign}${Math.abs(value).toFixed(1)}pp`;
+  };
+
+  const renderPrevButton = (onPrev?: () => void) => {
+    if (!hasPrevRange) return null;
+    const disabled = !onPrev;
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (disabled || !onPrev) return;
+          onPrev();
+        }}
+        style={{
+          ...prevButtonStyle,
+          color: disabled ? "#94a3b8" : "#2563eb",
+          cursor: disabled ? "not-allowed" : "pointer",
+        }}
+      >
+        Prev
+      </button>
+    );
+  };
+
+  const renderMetricDelta = (current: number, previous: number, mode: "premium" | "apps", onPrev?: () => void) => {
+    if (!hasPrevRange) return null;
+    const delta = current - previous;
+    const pct = previous ? (delta / previous) * 100 : null;
+
+    const deltaText =
+      pct === null
+        ? `${formatSignedMetricValue(delta, mode)} vs prev`
+        : `${formatSignedMetricValue(delta, mode)} (${formatSignedPercent(pct)}) vs prev`;
+
+    return (
+      <div style={{ fontSize: 12, color: "#6b7280", display: "flex", alignItems: "center", gap: 6 }}>
+        <span>{deltaText}</span>
+        {renderPrevButton(onPrev)}
+      </div>
+    );
+  };
+
+  const renderShareDelta = (current: number, previous: number, onPrev?: () => void) => {
+    if (!hasPrevRange) return null;
+    const delta = current - previous;
+    return (
+      <div style={{ fontSize: 12, color: "#6b7280", display: "flex", alignItems: "center", gap: 6 }}>
+        <span>{`${formatSignedPoints(delta)} vs prev`}</span>
+        {renderPrevButton(onPrev)}
+      </div>
+    );
+  };
+
+  const renderShareDeltaLine = (label: string, current: number, previous: number, onPrev?: () => void) => {
+    if (!hasPrevRange) return null;
+    const delta = current - previous;
+    return (
+      <div
+        style={{
+          fontSize: 12,
+          color: "#6b7280",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <span>{`${label}: ${formatSignedPoints(delta)} vs prev`}</span>
+        {renderPrevButton(onPrev)}
+      </div>
+    );
+  };
+
+  const trendChartData = useMemo(() => {
+    const groupedTrend = trendMode === "grouped" ? aggregatedTrend : null;
+    const labels = groupedTrend?.labels?.length ? groupedTrend.labels : lobFiltered.labels;
+    const series: any[] = [];
+
+    if (groupedTrend && groupedTrend.series?.length) {
+      const categoryLabels: Record<"PC" | "FS" | "IPS", string> = { PC: "P&C", FS: "FS", IPS: "IPS" };
+      const colorMap: Record<"PC" | "FS" | "IPS", string> = { PC: "#1D4ED8", FS: "#C2410C", IPS: "#7C3AED" };
+      groupedTrend.series.forEach((entry) => {
+        const categoryKey = entry.category.toLowerCase() as "pc" | "fs" | "ips";
+        if (!trendGroups[categoryKey]) return;
+        const dataPoints = labels.map((_, idx) => {
+          const appsVal = entry.apps[idx] ?? 0;
+          const premiumVal = entry.premium[idx] ?? 0;
+          return { value: metric === "apps" ? appsVal : premiumVal, apps: appsVal, premium: premiumVal, category: entry.category };
+        });
+        series.push({
+          name: categoryLabels[entry.category],
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 3 },
+          itemStyle: { color: colorMap[entry.category] },
+          data: dataPoints,
+        });
+      });
+    } else {
+      (lobFiltered.series ?? []).forEach((s) => {
+        const normalized = normalizeLobName(s.name);
+        const category = lobToCategory(normalized);
+        const categoryKey = category ? (category.toLowerCase() as "pc" | "fs" | "ips") : null;
+        if (categoryKey && !trendGroups[categoryKey]) return;
+        const dataPoints = labels.map((label, idx) => {
+          const value = s.data[idx] ?? 0;
+          return {
+            value,
+            apps: metric === "apps" ? value : 0,
+            premium: metric === "premium" ? value : 0,
+            label,
+            category,
+          };
+        });
+        series.push({
+          name: s.name,
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 3 },
+          itemStyle: { color: LOB_COLORS[normalized] ?? "#2563eb" },
+          data: dataPoints,
+        });
+      });
+    }
+
+    // Guard empty labels/series so charts can render a placeholder instead.
+    if (!labels.length || series.length === 0) {
+      return { labels, option: null as EChartsOption | null };
+    }
+
+    const option: EChartsOption = {
+      tooltip: {
+        trigger: "axis",
+        formatter: (params: any) => {
+          const list = Array.isArray(params) ? params : [params];
+          const axisLabel = list[0]?.axisValueLabel || "";
+          const lines = list.map((p) => {
+            const datum: any = p?.data ?? {};
+            const valueNum = typeof datum === "object" && datum !== null ? Number(datum.value ?? 0) : Number(p?.data) || 0;
+            const appsNum =
+              typeof datum === "object" && datum !== null && typeof datum.apps === "number"
+                ? datum.apps
+                : metric === "apps"
+                ? valueNum
+                : 0;
+            const premiumNum =
+              typeof datum === "object" && datum !== null && typeof datum.premium === "number"
+                ? datum.premium
+                : metric === "premium"
+                ? valueNum
+                : 0;
+            return `${p.marker}${p.seriesName}: ${Math.round(appsNum)} apps | $${Math.round(premiumNum)}`;
+          });
+          return [axisLabel, ...lines].join("<br/>");
+        },
+      },
+      legend: series.length > 1 ? { type: "scroll", data: series.map((s) => s.name) } : undefined,
+      dataZoom: [{ type: "slider" }],
+      xAxis: { type: "category", data: labels },
+      yAxis: { type: "value" },
+      series,
+    };
+
+    return { labels, option };
+  }, [trendMode, aggregatedTrend, lobFiltered.labels, lobFiltered.series, trendGroups, metric]);
+
+  const productsChartOption = useMemo(() => {
+    const TOP_PRODUCTS_N = 8;
+    const topSeries = productsFiltered.series
+      .map((s) => {
+        const total = s.data.reduce((a, b) => a + b, 0);
+        return {
+          name: s.name,
+          value: total,
+          apps: metric === "apps" ? total : undefined,
+          premium: metric === "premium" ? total : undefined,
+        };
+      })
+      .sort((a, b) => b.value - a.value)
+      .slice(0, TOP_PRODUCTS_N);
+
+    const option: EChartsOption = {
+      tooltip: {
+        trigger: "axis",
+        formatter: (params: any) => {
+          const item = Array.isArray(params) ? params[0] : params;
+          const datum: any = item?.data ?? {};
+          const appsVal = datum.apps ?? datum.value ?? 0;
+          const premiumVal = datum.premium ?? datum.value ?? 0;
+          return `${item.name}<br/>Apps: ${Math.round(appsVal)} • $${Math.round(premiumVal)}`;
+        },
+      },
+      xAxis: { type: "value" },
+      yAxis: { type: "category", data: topSeries.map((s) => s.name) },
+      series: [
+        {
+          type: "bar",
+          data: topSeries.map((s) => ({ value: s.value, apps: s.apps, premium: s.premium, name: s.name })),
+          itemStyle: { color: "#2563eb" },
+        },
+      ],
+    };
+
+    return option;
+  }, [productsFiltered.series, metric]);
+
+  const lobByAgencyGroupChart = useMemo(() => {
+    if (!lobByAgencyData?.lobNames?.length || !lobByAgencyData.series?.length) {
+      return null;
+    }
+
+    const lobNames = lobByAgencyData.lobNames;
+    const uniqueSeries: LobByAgencySeries[] = [];
+    const seen = new Set<string>();
+    lobByAgencyData.series.forEach((s) => {
+      if (seen.has(s.agencyId)) return;
+      seen.add(s.agencyId);
+      uniqueSeries.push(s);
+    });
+
+    const series = uniqueSeries.map((row) => ({
+      name: row.agencyName,
+      type: "bar",
+      emphasis: { focus: "series" },
+      data: lobNames.map((lob, idx) => {
+        const appsVal = row.apps[idx] ?? 0;
+        const premiumVal = row.premium[idx] ?? 0;
+        return {
+          value: metric === "apps" ? appsVal : premiumVal,
+          apps: appsVal,
+          premium: premiumVal,
+          lob,
+          agencyId: row.agencyId,
+        };
+      }),
+    }));
+
+    const option: EChartsOption = {
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        formatter: (params: any) => {
+          const list = Array.isArray(params) ? params : [params];
+          const axisLabel = list[0]?.axisValueLabel || "";
+          const lines = list.map((p) => {
+            const datum: any = p?.data ?? {};
+            const appsVal = typeof datum === "object" ? datum.apps ?? 0 : 0;
+            const premiumVal = typeof datum === "object" ? datum.premium ?? 0 : 0;
+            return `${p.marker || ""}${p.seriesName}: ${Math.round(appsVal)} apps • $${Math.round(premiumVal)}`;
+          });
+          return [axisLabel, ...lines].join("<br/>");
+        },
+      },
+      legend: isSingleAgencyView ? undefined : { type: "scroll" },
+      grid: { left: 50, right: 20, top: 40, bottom: 40 },
+      xAxis: { type: "category", data: lobNames },
+      yAxis: { type: "value" },
+      series,
+    };
+
+    return { option };
+  }, [lobByAgencyData, metric, isSingleAgencyView]);
+
+  const lobOverviewChart = useMemo(() => {
+    const data = lob.lobByAgency ?? null;
+    if (!data?.lobNames?.length || !data.series?.length) {
+      return null;
+    }
+
+    const canonicalToOriginal = new Map<string, string>();
+    data.lobNames.forEach((label) => {
+      const canon = normalizeLobName(label);
+      if (canon) canonicalToOriginal.set(canon, label);
+    });
+    const orderedCanonical = CANONICAL_LOB_ORDER.filter((c) => canonicalToOriginal.has(c)).map((c) => canonicalToOriginal.get(c)!);
+    const used = new Set(orderedCanonical);
+    const extras = data.lobNames.filter((l) => !used.has(l));
+    const lobNamesOrdered = [...orderedCanonical, ...extras];
+
+    const selectedAgencyIds = agencyFilter.length ? agencyFilter : data.series.map((s) => s.agencyId);
+    const uniqueSeriesMap = new Map<string, (typeof data.series)[number]>();
+    data.series.forEach((s) => {
+      if (!uniqueSeriesMap.has(s.agencyId)) uniqueSeriesMap.set(s.agencyId, s);
+    });
+    const orderedAgencyIds = selectedAgencyIds.length ? selectedAgencyIds : Array.from(uniqueSeriesMap.keys());
+    const filteredSeries = orderedAgencyIds
+      .map((id) => uniqueSeriesMap.get(id))
+      .filter(Boolean)
+      .sort((a, b) => (a?.agencyName || "").localeCompare(b?.agencyName || ""));
+
+    if (!filteredSeries.length) {
+      return null;
+    }
+
+    const series = filteredSeries.map((row) => ({
+      name: row!.agencyName,
+      type: "bar",
+      emphasis: { focus: "series" as const },
+      data: lobNamesOrdered.map((lobName, idx) => {
+        const appsVal = row!.apps[idx] ?? 0;
+        const premiumVal = row!.premium[idx] ?? 0;
+        return {
+          value: metric === "apps" ? appsVal : premiumVal,
+          apps: appsVal,
+          premium: premiumVal,
+          lobName,
+          agencyId: row!.agencyId,
+          agencyName: row!.agencyName,
+        };
+      }),
+    }));
+
+    const tooltipFixed = (params: any) => {
+      const list = Array.isArray(params) ? params : [params];
+      const datum0: any = list[0]?.data ?? {};
+      const title = datum0?.lobName || list[0]?.axisValueLabel || "";
+      const lines = list.map((p) => {
+        const datum: any = p?.data ?? {};
+        const appsVal = typeof datum === "object" ? datum.apps ?? 0 : 0;
+        const premiumVal = typeof datum === "object" ? datum.premium ?? 0 : 0;
+        return `${p.marker || ""}${datum.agencyName || p.seriesName}: ${Math.round(appsVal)} apps • $${Math.round(premiumVal)}`;
+      });
+      return [title, ...lines].join("<br/>");
+    };
+
+    const option: EChartsOption = {
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, formatter: tooltipFixed },
+      legend: isSingleAgencyView ? undefined : { type: "scroll" },
+      grid: { left: 40, right: 20, top: 36, bottom: 30 },
+      xAxis: { type: "category", data: lobNamesOrdered },
+      yAxis: { type: "value" },
+      series,
+    };
+
+    return { option, selectedAgencyIds };
+  }, [lob.lobByAgency, agencyFilter, metric, isSingleAgencyView]);
+
+  const lobSummaryOption = useMemo(() => {
+    return {
+      tooltip: { trigger: "axis" },
+      xAxis: { type: "value" },
+      yAxis: { type: "category", data: lobFiltered.series.map((s) => s.name) },
+      series: [
+        {
+          type: "bar",
+          data: lobFiltered.series.map((s) => s.data.reduce((a, b) => a + b, 0)),
+          itemStyle: { color: "#16a34a" },
+        },
+      ],
+    } as EChartsOption;
+  }, [lobFiltered.series]);
+
+  // ---------- renderChart (unchanged except product tooltip fix) ----------
   const renderChart = (id: string) => {
     if (id === "trend") {
-      const labels =
-        trendFiltered.trendByAgencyCategory?.labels?.length ? trendFiltered.trendByAgencyCategory.labels : trendFiltered.labels;
-      const rawSeries = trendFiltered.trendByAgencyCategory?.series || [];
-
-      const categoryOrder: ("PC" | "FS" | "IPS")[] = ["PC", "FS", "IPS"];
-      const categoryLabels: Record<"PC" | "FS" | "IPS", string> = { PC: "P&C", FS: "FS", IPS: "IPS" };
-      const palette: Record<"PC" | "FS" | "IPS", string>[] = [
-        { PC: "#1D4ED8", IPS: "#3B82F6", FS: "#93C5FD" },
-        { PC: "#C2410C", IPS: "#F97316", FS: "#FDBA74" },
-      ];
-
-      const orderedAgencyIds =
-        agencyFilter.length > 0
-          ? agencyFilter
-          : Array.from(
-              rawSeries.reduce((set, s) => {
-                set.add(s.agencyId);
-                return set;
-              }, new Set<string>())
-            );
-
-      const series = [];
-      for (const agencyId of orderedAgencyIds) {
-        const agencySeries = rawSeries.filter((s) => s.agencyId === agencyId);
-        if (!agencySeries.length) continue;
-        const agencyName = agencySeries[0]?.agencyName || agencyId;
-        const agencyIdx = orderedAgencyIds.indexOf(agencyId);
-        const paletteForAgency = palette[agencyIdx % palette.length] || palette[0];
-        for (const cat of categoryOrder) {
-          if (!trendGroups[cat.toLowerCase() as "pc" | "fs" | "ips"]) continue;
-          const catSeries = agencySeries.find((s) => s.category === cat);
-          if (!catSeries) continue;
-          const dataPoints = labels.map((_, idx) => {
-            const appsVal = catSeries.apps[idx] ?? 0;
-            const premiumVal = catSeries.premium[idx] ?? 0;
-            return { value: metric === "apps" ? appsVal : premiumVal, apps: appsVal, premium: premiumVal };
-          });
-          series.push({
-            name: `${agencyName} — ${categoryLabels[cat]}`,
-            type: "line",
-            smooth: true,
-            showSymbol: false,
-            lineStyle: { width: 3 },
-            itemStyle: { color: paletteForAgency[cat] },
-            data: dataPoints,
-          });
-        }
-      }
-
       const trendToggles = (
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
           {[
@@ -576,7 +1465,7 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
         </div>
       );
 
-      if (!labels.length || series.length === 0) {
+      if (!trendChartData.option) {
         return (
           <div style={{ display: "grid", gap: 6 }}>
             {trendToggles}
@@ -585,110 +1474,67 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
         );
       }
 
-      const option: EChartsOption = {
-        tooltip: {
-          trigger: "axis",
-          formatter: (params: any) => {
-            const list = Array.isArray(params) ? params : [params];
-            const axisLabel = list[0]?.axisValueLabel || "";
-            const lines = list.map((p) => {
-              const datum: any = p?.data ?? {};
-              const appsVal = typeof datum === "object" && datum !== null ? datum.apps ?? datum.value ?? 0 : p?.data ?? 0;
-              const premiumVal =
-                typeof datum === "object" && datum !== null ? datum.premium ?? datum.value ?? 0 : p?.data ?? 0;
-              const appsNum = typeof appsVal === "number" ? appsVal : Number(appsVal) || 0;
-              const premiumNum = typeof premiumVal === "number" ? premiumVal : Number(premiumVal) || 0;
-              return `${p.marker}${p.seriesName}: ${appsNum} apps • $${Math.round(premiumNum)}`;
-            });
-            return [axisLabel, ...lines].join("<br/>");
-          },
-        },
-        legend: { type: "scroll", data: series.map((s) => s.name) },
-        dataZoom: [{ type: "slider" }],
-        xAxis: { type: "category", data: labels },
-        yAxis: { type: "value" },
-        series,
+      const handleTrendPointClick = (params: any) => {
+        if (!enableChartDrilldown) return;
+        const datum: any = params?.data ?? {};
+        const agencyId = datum?.agencyId as string | undefined;
+        const agenciesForNav = agencyId ? [agencyId] : agenciesParam;
+        const seriesName = typeof params?.seriesName === "string" ? params.seriesName : undefined;
+        const isGroupedMode = trendMode === "grouped";
+        const category = isGroupedMode ? ((datum?.category as "PC" | "FS" | "IPS" | undefined) ?? categoryFromSeriesName(seriesName)) : undefined;
+        const lobName = !isGroupedMode ? seriesName : undefined;
+        if (isGroupedMode && !category) return;
+        if (!isGroupedMode && !lobName) return;
+        goToSoldProducts({
+          lobName,
+          category,
+          agencyIds: agenciesForNav,
+          statuses: navStatuses,
+          start: navStart,
+          end: navEnd,
+          labels: trendChartData.labels,
+          granularity,
+          customStart,
+          customEnd,
+          monthFilter,
+        });
       };
+
       return (
         <div style={{ display: "grid", gap: 6 }}>
           {trendToggles}
-          <Chart option={option} height={280} />
+          <Chart option={trendChartData.option} height={280} onEvents={{ click: handleTrendPointClick }} />
+          {enableChartDrilldown ? <div style={{ fontSize: 12, color: "#6b7280" }}>Tip: click a series to drill down</div> : null}
         </div>
       );
     }
 
     if (id === "products") {
-      const topSeries = productsFiltered.series
-        .map((s) => ({
-          name: s.name,
-          value: s.data.reduce((a, b) => a + b, 0),
-        }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 8);
-      const option: EChartsOption = {
-        tooltip: { trigger: "axis" },
-        xAxis: { type: "value" },
-        yAxis: { type: "category", data: topSeries.map((s) => s.name) },
-        series: [{ type: "bar", data: topSeries.map((s) => s.value), itemStyle: { color: "#2563eb" } }],
+      const handleProductClick = (_params: any) => {
+        if (!enableChartDrilldown) return;
+        goToSoldProducts({
+          agencyIds: agenciesParam,
+          statuses: navStatuses,
+          start: navStart,
+          end: navEnd,
+          customStart,
+          customEnd,
+          monthFilter,
+          labels: productsFiltered.labels,
+          granularity,
+        });
       };
-      return <Chart option={option} height={320} />;
+
+      return <Chart option={productsChartOption} height={320} onEvents={{ click: handleProductClick }} />;
     }
 
     if (id === "lobByAgencyGroup") {
-      if (!lobByAgencyData?.lobNames?.length || !lobByAgencyData.series?.length) {
+      if (!lobByAgencyGroupChart) {
         return <div style={{ color: "#6b7280", padding: 8 }}>No data for selected filters</div>;
       }
 
-      const lobNames = lobByAgencyData.lobNames;
-      const uniqueSeries: LobByAgencySeries[] = [];
-      const seen = new Set<string>();
-      lobByAgencyData.series.forEach((s) => {
-        if (seen.has(s.agencyId)) return;
-        seen.add(s.agencyId);
-        uniqueSeries.push(s);
-      });
-
-      const series = uniqueSeries.map((row) => ({
-        name: row.agencyName,
-        type: "bar",
-        emphasis: { focus: "series" },
-        data: lobNames.map((lob, idx) => {
-          const appsVal = row.apps[idx] ?? 0;
-          const premiumVal = row.premium[idx] ?? 0;
-          return {
-            value: metric === "apps" ? appsVal : premiumVal,
-            apps: appsVal,
-            premium: premiumVal,
-            lob,
-            agencyId: row.agencyId,
-          };
-        }),
-      }));
-
-      const option: EChartsOption = {
-        tooltip: {
-          trigger: "axis",
-          axisPointer: { type: "shadow" },
-          formatter: (params: any) => {
-            const list = Array.isArray(params) ? params : [params];
-            const axisLabel = list[0]?.axisValueLabel || "";
-            const lines = list.map((p) => {
-              const datum: any = p?.data ?? {};
-              const appsVal = typeof datum === "object" ? datum.apps ?? 0 : 0;
-              const premiumVal = typeof datum === "object" ? datum.premium ?? 0 : 0;
-              return `${p.marker || ""}${p.seriesName}: ${Math.round(appsVal)} apps • $${Math.round(premiumVal)}`;
-            });
-            return [axisLabel, ...lines].join("<br/>");
-          },
-        },
-        legend: { type: "scroll" },
-        grid: { left: 50, right: 20, top: 40, bottom: 40 },
-        xAxis: { type: "category", data: lobNames },
-        yAxis: { type: "value" },
-        series,
-      };
-
       const handleBarClick = (params: any) => {
+        if (!enableChartDrilldown) return;
         const datum: any = params?.data ?? {};
         const lob = datum?.lob || params?.name;
         const agencyId = datum?.agencyId;
@@ -697,92 +1543,38 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
           lobName: lob,
           agencyIds: [agencyId],
           statuses: navStatuses,
-          start: rangeShown.start,
-          end: rangeShown.end,
+          start: navStart,
+          end: navEnd,
+          customStart,
+          customEnd,
+          monthFilter,
         });
       };
 
-      return <Chart option={option} height={320} onEvents={{ click: handleBarClick }} />;
+      return <Chart option={lobByAgencyGroupChart.option} height={320} onEvents={{ click: handleBarClick }} />;
     }
 
     if (id === "lobOverview") {
-      const data = lob.lobByAgency ?? null;
-      if (!data?.lobNames?.length || !data.series?.length) {
+      if (!lobOverviewChart) {
         return <div style={{ color: "#6b7280", padding: 8 }}>No data for selected filters</div>;
       }
-
-      const lobNamesOrdered = [
-        ...LOB_ORDER.filter((lob) => data.lobNames.includes(lob)),
-        ...data.lobNames.filter((lob) => !LOB_ORDER.includes(lob as (typeof LOB_ORDER)[number])),
-      ];
-
-      const selectedAgencyIds = agencyFilter.length ? agencyFilter : data.series.map((s) => s.agencyId);
-      const uniqueSeriesMap = new Map<string, (typeof data.series)[number]>();
-      data.series.forEach((s) => {
-        if (!uniqueSeriesMap.has(s.agencyId)) uniqueSeriesMap.set(s.agencyId, s);
-      });
-      const orderedAgencyIds = selectedAgencyIds.length ? selectedAgencyIds : Array.from(uniqueSeriesMap.keys());
-      const filteredSeries = orderedAgencyIds
-        .map((id) => uniqueSeriesMap.get(id))
-        .filter(Boolean)
-        .sort((a, b) => (a?.agencyName || "").localeCompare(b?.agencyName || ""));
-
-      if (!filteredSeries.length) {
-        return <div style={{ color: "#6b7280", padding: 8 }}>No data for selected filters</div>;
-      }
-
-      const series = filteredSeries.map((row) => ({
-        name: row!.agencyName,
-        type: "bar",
-        emphasis: { focus: "series" as const },
-        data: lobNamesOrdered.map((lobName, idx) => {
-          const appsVal = row!.apps[idx] ?? 0;
-          const premiumVal = row!.premium[idx] ?? 0;
-          return {
-            value: metric === "apps" ? appsVal : premiumVal,
-            apps: appsVal,
-            premium: premiumVal,
-            lobName,
-            agencyId: row!.agencyId,
-            agencyName: row!.agencyName,
-          };
-        }),
-      }));
-
-      const tooltip = (params: any) => {
-        const list = Array.isArray(params) ? params : [params];
-        const datum0: any = list[0]?.data ?? {};
-        const title = datum0?.lobName || list[0]?.axisValueLabel || "";
-        const lines = list.map((p) => {
-          const datum: any = p?.data ?? {};
-          const appsVal = typeof datum === "object" ? datum.apps ?? 0 : 0;
-          const premiumVal = typeof datum === "object" ? datum.premium ?? 0 : 0;
-          return `${p.marker || ""}${datum.agencyName || p.seriesName}: ${Math.round(appsVal)} apps • $${Math.round(premiumVal)}`;
-        });
-        return [title, ...lines].join("<br/>");
-      };
-
-      const option: EChartsOption = {
-        tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, formatter: tooltip },
-        legend: { type: "scroll" },
-        grid: { left: 40, right: 20, top: 36, bottom: 30 },
-        xAxis: { type: "category", data: lobNamesOrdered },
-        yAxis: { type: "value" },
-        series,
-      };
 
       const handleClick = (params: any) => {
+        if (!enableChartDrilldown) return;
         const datum: any = params?.data ?? {};
         const lobName = datum?.lobName || params?.name;
         if (!lobName) return;
         const agencyId = datum?.agencyId as string | undefined;
-        const agenciesForNav = agencyId ? [agencyId] : selectedAgencyIds;
+        const agenciesForNav = agencyId ? [agencyId] : lobOverviewChart.selectedAgencyIds;
         goToSoldProducts({
           lobName,
           agencyIds: agenciesForNav,
           statuses: navStatuses,
-          start: rangeShown.start,
-          end: rangeShown.end,
+          start: navStart,
+          end: navEnd,
+          customStart,
+          customEnd,
+          monthFilter,
         });
       };
 
@@ -791,7 +1583,7 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
           <div style={{ color: "#475569", fontSize: 12 }}>
             LoB overview (grouped bar). Toggle Apps/Premium. Click a bar to view policies.
           </div>
-          <Chart option={option} height={320} onEvents={{ click: handleClick }} />
+          <Chart option={lobOverviewChart.option} height={320} onEvents={{ click: handleClick }} />
         </div>
       );
     }
@@ -1026,6 +1818,9 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
                     statuses: navStatuses,
                     start: rangeShown.start,
                     end: rangeShown.end,
+                    customStart,
+                    customEnd,
+                    monthFilter,
                   });
                 },
               }}
@@ -1052,14 +1847,32 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
             <div style={{ color: "#6b7280", fontSize: 12 }}>No production</div>
           ) : (
             <div style={{ display: "grid", gap: 4 }}>
-              {agency.topSellers.slice(0, 4).map((s) => (
-                <div key={s.personName} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                  <span>{s.personName}</span>
-                  <span style={{ color: "#475569" }}>
-                    {metric === "premium" ? `$${Math.round(s.premium)}` : `${Math.round(s.apps)} apps`}
-                  </span>
-                </div>
-              ))}
+              {agency.topSellers
+                .slice()
+                .sort((a, b) =>
+                  metric === "premium" ? (b.premium ?? 0) - (a.premium ?? 0) : (b.apps ?? 0) - (a.apps ?? 0)
+                )
+                .slice(0, 4)
+                .map((s) => {
+                  const value = metric === "premium" ? Math.round(s.premium) : Math.round(s.apps);
+                  const muted = value === 0;
+                  return (
+                    <div
+                      key={s.personName}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        fontSize: 12,
+                        color: muted ? "#9ca3af" : undefined,
+                      }}
+                    >
+                      <span>{s.personName}</span>
+                      <span style={{ color: muted ? "#9ca3af" : "#475569" }}>
+                        {metric === "premium" ? `$${value}` : `${value} apps`}
+                      </span>
+                    </div>
+                  );
+                })}
               {agency.allOthers.apps > 0 || agency.allOthers.premium > 0 ? (
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b7280" }}>
                   <span>All others</span>
@@ -1085,13 +1898,20 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
         });
       };
 
-      const handleTrendPointClick = () => {
+      const handleTrendPointClick = (params: any) => {
+        if (!enableChartDrilldown) return;
+        const idx = typeof params?.dataIndex === "number" ? params.dataIndex : null;
+        if (idx === null) return;
+        const label = trendLabels[idx];
+        if (!label || label.length !== 7) return;
+        const start = `${label}-01`;
+        const end = formatISODate(endOfMonth(new Date(`${label}-01T00:00:00`)));
         goToSoldProducts({
           lobName: trendLobName,
           agencyIds: selectedAgencyIds,
           statuses: navStatuses,
-          start: rangeShown.start,
-          end: rangeShown.end,
+          start,
+          end,
         });
       };
 
@@ -1143,9 +1963,20 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
                   <div
                     style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, cursor: "pointer" }}
                     onClick={() => handleCardNavigate(card.lobName)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleCardNavigate(card.lobName);
+                      }
+                    }}
                   >
                     <div style={{ fontWeight: 800, color: headerColor }}>{card.lobName}</div>
-                    <div style={{ color: "#475569", fontSize: 12 }}>{metric === "apps" ? "Apps" : "Premium"}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#475569", fontSize: 12 }}>
+                      <span>{metric === "apps" ? "Apps" : "Premium"}</span>
+                      <span style={{ color: "#2563eb", fontWeight: 700 }}>View policies →</span>
+                    </div>
                   </div>
                   <div style={{ fontSize: 22, fontWeight: 800 }}>
                     {metric === "premium" ? `$${Math.round(cardValue)}` : Math.round(cardValue)}
@@ -1187,33 +2018,167 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
       );
     }
 
-    const option: EChartsOption = {
-      tooltip: { trigger: "axis" },
-      xAxis: { type: "value" },
-      yAxis: { type: "category", data: lobFiltered.series.map((s) => s.name) },
-      series: [
-        {
-          type: "bar",
-          data: lobFiltered.series.map((s) => s.data.reduce((a, b) => a + b, 0)),
-          itemStyle: { color: "#16a34a" },
-        },
-      ],
-    };
-    return <Chart option={option} height={280} />;
+    return <Chart option={lobSummaryOption} height={280} />;
   };
 
   const toggleChart = (id: string) =>
     setSelectedCharts((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
+  const chartsByGroup = useMemo(() => {
+    const grouped: Record<ChartGroupId, string[]> = {
+      exec: [],
+      trend: [],
+      mix: [],
+      people: [],
+      drilldowns: [],
+    };
+    CHARTS.forEach((chart) => {
+      if (!selectedCharts.includes(chart.id)) return;
+      const groupId = CHART_GROUP_MAP[chart.id] ?? "mix";
+      grouped[groupId].push(chart.id);
+    });
+    return grouped;
+  }, [selectedCharts]);
+
+  const renderChartCard = (id: string) => {
+    const meta = CHARTS.find((c) => c.id === id);
+    return (
+      <div key={id} className="surface" style={{ padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}>
+        <div
+          style={{
+            marginBottom: 6,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700 }}>{meta?.label}</div>
+            {id === "lobByAgencyGroup" ? (
+              <div style={{ color: "#475569", fontSize: 12 }}>
+                Compare offices by LoB. Toggle Apps/Premium. Click a bar to view policies.
+              </div>
+            ) : null}
+            {id === "lobOverview" ? (
+              <div style={{ color: "#475569", fontSize: 12 }}>
+                Grouped bars by agency and LoB. Toggle Apps/Premium. Click to drill into policies.
+              </div>
+            ) : null}
+          </div>
+        </div>
+        {renderChart(id)}
+      </div>
+    );
+  };
+
+  const trendModeControl = (
+    <div style={{ display: "inline-flex", border: "1px solid #e5e7eb", borderRadius: 999, overflow: "hidden" }}>
+      <button
+        type="button"
+        onClick={() => {
+          setTrendModeFallback(false);
+          setTrendMode("grouped");
+        }}
+        style={{
+          border: "none",
+          padding: "4px 10px",
+          fontSize: 12,
+          fontWeight: 600,
+          background: trendMode === "grouped" ? "#2563eb" : "white",
+          color: trendMode === "grouped" ? "white" : "#475569",
+          cursor: "pointer",
+        }}
+      >
+        Grouped (PC/FS/IPS)
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setTrendModeFallback(false);
+          setTrendMode("raw");
+        }}
+        style={{
+          border: "none",
+          padding: "4px 10px",
+          fontSize: 12,
+          fontWeight: 600,
+          background: trendMode === "raw" ? "#2563eb" : "white",
+          color: trendMode === "raw" ? "white" : "#475569",
+          cursor: "pointer",
+        }}
+      >
+        Raw (LoB)
+      </button>
+    </div>
+  );
+
+  const trendHeaderRight = (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      {trendModeFallback ? (
+        <span style={{ fontSize: 12, color: "#b45309" }}>Grouped unavailable for this selection; showing Raw.</span>
+      ) : null}
+      {trendModeControl}
+    </div>
+  );
+
+  const productMixOption: EChartsOption | null = useMemo(() => {
+    if (!productMixData) return null;
+    return {
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        formatter: (params: any) => {
+          const list = Array.isArray(params) ? params : [params];
+          const axisLabel = list[0]?.axisValueLabel || "";
+          const lines = list.map((p) => `${p.marker}${p.seriesName}: ${Math.round(p.value ?? 0)}`);
+          return [axisLabel, ...lines].join("<br/>");
+        },
+      },
+      legend: { data: productMixData.series.map((s) => s.name) },
+      dataZoom: [{ type: "slider" }],
+      xAxis: { type: "category", data: productMixData.labels },
+      yAxis: { type: "value" },
+      series: productMixData.series,
+    };
+  }, [productMixData]);
+
+  const handleProductMixClick = (params: any) => {
+    if (!enableChartDrilldown) return;
+    const seriesName = typeof params?.seriesName === "string" ? params.seriesName : undefined;
+    const category = categoryFromSeriesName(seriesName);
+    if (!category) return;
+    goToSoldProducts({
+      category,
+      agencyIds: agenciesParam,
+      statuses: navStatuses,
+      start: navStart,
+      end: navEnd,
+      customStart,
+      customEnd,
+      monthFilter,
+    });
+  };
+
+  const formatMoverValue = (value: number) => (metric === "premium" ? `$${Math.round(value)}` : `${Math.round(value)}`);
+  const formatMoverDelta = (delta: number, pct: number | null) => {
+    const pctText = pct === null ? "n/a" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+    return `${formatSignedMetricValue(delta, metric)} (${pctText})`;
+  };
+
   return (
-    <div className="surface" style={{ padding: 12, borderRadius: 12 }}>
+    <div className="surface" style={{ padding: compact ? 8 : 12, borderRadius: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontWeight: 800 }}>Production Overview</div>
+          <div style={{ fontWeight: 800, fontSize: compact ? 15 : 16 }}>Production Overview</div>
           <div style={{ color: "#6b7280", fontSize: 13 }}>Toggle charts and filters. Inline preview uses API data.</div>
         </div>
-        <div className="surface" style={{ borderRadius: 12, padding: 10, border: "1px solid #e5e7eb", background: "#f8fafc" }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+        <div
+          className="surface"
+          style={{ borderRadius: 12, padding: compact ? 8 : 10, border: "1px solid #e5e7eb", background: "#f8fafc" }}
+        >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: compact ? 8 : 12, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span style={{ color: "#475569", fontSize: 12 }}>Apps | Premium</span>
               <label
@@ -1268,6 +2233,13 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
                 <option value="month">Monthly</option>
                 <option value="week">Weekly</option>
               </select>
+            </div>
+
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ color: "#475569", fontSize: 12 }}>Chart drilldown</span>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                <input type="checkbox" checked={enableChartDrilldown} onChange={(e) => setEnableChartDrilldown(e.target.checked)} />
+              </label>
             </div>
 
             <div style={{ display: "flex", gap: 6, alignItems: "center", position: "relative" }}>
@@ -1398,172 +2370,484 @@ export function PresetProductionOverview({ agencies }: { agencies: AgencyOption[
         ))}
       </div>
 
-      {lobOverviewCards.length > 0 ? (
-        <div className="surface" style={{ padding: 12, borderRadius: 12, border: "1px solid #e5e7eb", marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontWeight: 800 }}>Line of Business Overview</div>
-              <div style={{ color: "#6b7280", fontSize: 13 }}>LoB-first view with agency comparisons and trends.</div>
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10 }}>
-            {lobOverviewCards.map((card) => {
-              const cardTotal = metric === "premium" ? card.totalPremium : card.totalApps;
-              const headerColor = LOB_COLORS[card.lob] ?? "#111827";
-              const agenciesDisplay = card.agencies;
-
-              const trendSeries = [
-                {
-                  type: "line",
-                  name: metric === "apps" ? "Apps" : "Premium",
-                  smooth: true,
-                  symbol: "none",
-                  lineStyle: { width: 2, color: "#2563eb" },
-                  areaStyle: { color: "rgba(37,99,235,0.08)" },
-                  data: card.trend.labels.map((label, idx) => ({
-                    value: metric === "apps" ? card.trend.apps[idx] ?? 0 : card.trend.premium[idx] ?? 0,
-                    label,
-                    apps: card.trend.apps[idx] ?? 0,
-                    premium: card.trend.premium[idx] ?? 0,
-                  })),
-                },
-              ];
-
-              const trendOption: EChartsOption = {
-                tooltip: {
-                  trigger: "axis",
-                  formatter: (params: any) => {
-                    const item = Array.isArray(params) ? params[0] : params;
-                    const datum: any = item?.data ?? {};
-                    const appsVal = typeof datum === "object" ? datum.apps ?? datum.value ?? 0 : item?.data ?? 0;
-                    const premiumVal = typeof datum === "object" ? datum.premium ?? datum.value ?? 0 : item?.data ?? 0;
-                    return `${item.axisValue}<br/>Apps: ${appsVal} • $${Math.round(premiumVal)}`;
-                  },
-                },
-                grid: { left: 28, right: 10, top: 10, bottom: 20 },
-                xAxis: { type: "category", data: card.trend.labels, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
-                yAxis: { type: "value", axisLabel: { show: false }, splitLine: { show: false } },
-                series: trendSeries,
-              };
-
-              const handleCardClick = () => {
-                goToSoldProducts({
-                  lobName: card.lob,
-                  agencyIds: agencyFilter,
-                  statuses: navStatuses,
-                  start: rangeShown.start,
-                  end: rangeShown.end,
-                });
-              };
-
-              const handleTrendClick = (params: any) => {
-                params?.event?.event?.stopPropagation?.();
-                goToSoldProducts({
-                  lobName: card.lob,
-                  agencyIds: agencyFilter,
-                  statuses: navStatuses,
-                  start: rangeShown.start,
-                  end: rangeShown.end,
-                });
-              };
-
-              const trendEvents = { onEvents: { click: handleTrendClick } } as any;
-
-              return (
-                <div
-                  key={card.lob}
-                  className="surface"
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 10,
-                    display: "grid",
-                    gap: 8,
-                    cursor: "pointer",
-                    minHeight: 240,
-                  }}
-                  onClick={handleCardClick}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <div style={{ fontWeight: 800, color: headerColor }}>{card.lob}</div>
-                    <div style={{ color: "#475569", fontSize: 12 }}>{metric === "apps" ? "Apps" : "Premium"}</div>
-                  </div>
-                  <div style={{ fontSize: 22, fontWeight: 800 }}>
-                    {metric === "premium" ? `$${Math.round(cardTotal)}` : Math.round(cardTotal)}
-                  </div>
-                  {cardTotal === 0 ? <div style={{ color: "#6b7280", fontSize: 12 }}>No production</div> : null}
-                  <div>
-                    <Chart option={trendOption} height={120} {...trendEvents} />
-                  </div>
-                  <div style={{ display: "grid", gap: 8 }}>
-                    {agenciesDisplay.map((agency) => (
-                      <div key={agency.agencyId} className="surface" style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, alignItems: "center" }}>
-                          <div style={{ fontWeight: 700, fontSize: 13 }}>{agency.agencyName}</div>
-                          <div style={{ color: "#475569", fontSize: 12 }}>
-                            {metric === "premium"
-                              ? `$${Math.round(agency.totalPremium)}`
-                              : `${Math.round(agency.totalApps)} apps`}
-                          </div>
-                        </div>
-                        <div style={{ display: "grid", gap: 4 }}>
-                          {agency.sellers.slice(0, 4).map((s) => (
-                            <div key={s.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                              <span>{s.name}</span>
-                              <span style={{ color: "#475569" }}>
-                                {metric === "premium" ? `$${Math.round(s.premium)}` : `${Math.round(s.apps)} apps`}
-                              </span>
-                            </div>
-                          ))}
-                          {agency.others.apps > 0 || agency.others.premium > 0 ? (
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b7280" }}>
-                              <span>All others</span>
-                              <span>
-                                {metric === "premium"
-                                  ? `$${Math.round(agency.others.premium)}`
-                                  : `${Math.round(agency.others.apps)} apps`}
-                              </span>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+      <div
+        className="surface"
+        style={{
+          padding: "6px 10px",
+          borderRadius: 999,
+          border: "1px solid #e5e7eb",
+          marginBottom: 12,
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          flexWrap: "wrap",
+          background: "#f8fafc",
+        }}
+      >
+        <span style={{ fontWeight: 700, fontSize: 12, color: "#475569" }}>Groups</span>
+        {CHART_GROUPS.map((group) => (
+          <label key={group.id} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={chartGroups[group.id]}
+              onChange={(e) =>
+                setChartGroups((prev) => ({
+                  ...prev,
+                  [group.id]: e.target.checked,
+                }))
+              }
+            />
+            {group.label}
+          </label>
+        ))}
+      </div>
 
       <div style={{ display: "grid", gap: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-          <KPI label="Total" value={kpiTotals.total} metric={metric} />
-          <KPI label="Business" value={kpiTotals.business} metric={metric} />
-        </div>
-        {selectedCharts.map((id) => (
-          <div key={id} className="surface" style={{ padding: 10, borderRadius: 12, border: "1px solid #e5e7eb" }}>
-            {(() => {
-              const meta = CHARTS.find((c) => c.id === id);
-              return (
-                <div style={{ marginBottom: 6 }}>
-                  <div style={{ fontWeight: 700 }}>{meta?.label}</div>
-                  {id === "lobByAgencyGroup" ? (
-                    <div style={{ color: "#475569", fontSize: 12 }}>
-                      Compare offices by LoB. Toggle Apps/Premium. Click a bar to view policies.
-                    </div>
-                  ) : null}
-                  {id === "lobOverview" ? (
-                    <div style={{ color: "#475569", fontSize: 12 }}>
-                      Grouped bars by agency and LoB. Toggle Apps/Premium. Click to drill into policies.
-                    </div>
-                  ) : null}
+        {chartGroups.exec ? (
+          <ChartGroup id="exec" title="Executive Summary">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+              <KPI
+                label="Total"
+                value={kpiTotals.total}
+                metric={metric}
+                delta={renderMetricDelta(kpiTotals.total, previousKpiTotals.total, metric, () => goToPrevSoldProducts())}
+                onClick={() =>
+                  goToSoldProducts({
+                    agencyIds: agenciesParam,
+                    statuses: navStatuses,
+                    start: rangeShown.start,
+                    end: rangeShown.end,
+                    customStart,
+                    customEnd,
+                    monthFilter,
+                  })
+                }
+              />
+              <KPI
+                label="Business"
+                value={kpiTotals.business}
+                metric={metric}
+                delta={renderMetricDelta(kpiTotals.business, previousKpiTotals.business, metric, () => goToPrevSoldProducts({ businessOnly: true }))}
+                onClick={() =>
+                  goToSoldProducts({
+                    agencyIds: agenciesParam,
+                    statuses: navStatuses,
+                    start: rangeShown.start,
+                    end: rangeShown.end,
+                    customStart,
+                    customEnd,
+                    monthFilter,
+                    businessOnly: true,
+                  })
+                }
+              />
+              <KPI
+                label="Avg premium per app"
+                value={avgPremiumPerApp}
+                metric="premium"
+                delta={renderMetricDelta(avgPremiumPerApp, previousAvgPremiumPerApp, "premium", () => goToPrevSoldProducts())}
+                onClick={() =>
+                  goToSoldProducts({
+                    agencyIds: agenciesParam,
+                    statuses: navStatuses,
+                    start: rangeShown.start,
+                    end: rangeShown.end,
+                    customStart,
+                    customEnd,
+                    monthFilter,
+                  })
+                }
+              />
+              <div className="surface" style={{ padding: 12, borderRadius: 12, display: "grid", gap: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!pcLobParam) return;
+                      goToSoldProducts({
+                        agencyIds: agenciesParam,
+                        statuses: navStatuses,
+                        start: rangeShown.start,
+                        end: rangeShown.end,
+                        customStart,
+                        customEnd,
+                        monthFilter,
+                        lobName: pcLobParam,
+                      });
+                    }}
+                    disabled={!pcLobParam}
+                    style={{
+                      padding: 0,
+                      border: "none",
+                      background: "none",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#6b7280",
+                      cursor: pcLobParam ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    PC share
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!fsLobParam) return;
+                      goToSoldProducts({
+                        agencyIds: agenciesParam,
+                        statuses: navStatuses,
+                        start: rangeShown.start,
+                        end: rangeShown.end,
+                        customStart,
+                        customEnd,
+                        monthFilter,
+                        lobName: fsLobParam,
+                      });
+                    }}
+                    disabled={!fsLobParam}
+                    style={{
+                      padding: 0,
+                      border: "none",
+                      background: "none",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#6b7280",
+                      cursor: fsLobParam ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    FS share
+                  </button>
                 </div>
-              );
-            })()}
-            {renderChart(id)}
-          </div>
-        ))}
+                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 20 }}>
+                  <span>{pcShare.toFixed(1)}%</span>
+                  <span>{fsShare.toFixed(1)}%</span>
+                </div>
+                {hasPrevRange ? (
+                  <div style={{ display: "grid", gap: 4 }}>
+                    {renderShareDeltaLine(
+                      "PC",
+                      pcShare,
+                      previousPcShare,
+                      previousPcLobParam ? () => goToPrevSoldProducts({ lobName: previousPcLobParam }) : undefined
+                    )}
+                    {renderShareDeltaLine(
+                      "FS",
+                      fsShare,
+                      previousFsShare,
+                      previousFsLobParam ? () => goToPrevSoldProducts({ lobName: previousFsLobParam }) : undefined
+                    )}
+                  </div>
+                ) : null}
+              </div>
+              <KPI
+                label="Business premium share"
+                value={businessPremiumShare}
+                metric="premium"
+                valueDisplay={`${businessPremiumShare.toFixed(1)}%`}
+                delta={renderShareDelta(businessPremiumShare, previousBusinessPremiumShare, () => goToPrevSoldProducts({ businessOnly: true }))}
+                onClick={() =>
+                  goToSoldProducts({
+                    agencyIds: agenciesParam,
+                    statuses: navStatuses,
+                    start: rangeShown.start,
+                    end: rangeShown.end,
+                    customStart,
+                    customEnd,
+                    monthFilter,
+                    businessOnly: true,
+                  })
+                }
+              />
+            </div>
+          </ChartGroup>
+        ) : null}
+
+        {chartGroups.trend ? (
+          <ChartGroup id="trend" title="Trend" right={trendHeaderRight}>
+            {chartsByGroup.trend.length ? (
+              chartsByGroup.trend.map((id) => renderChartCard(id))
+            ) : (
+              <div style={{ color: "#6b7280", fontSize: 12 }}>Trend chart hidden by chart toggles.</div>
+            )}
+          </ChartGroup>
+        ) : null}
+
+        {chartGroups.mix ? (
+          <ChartGroup id="mix" title="Mix & Share">
+            {productMixOption ? (
+              <div className="surface" style={{ padding: 12, borderRadius: 12, border: "1px solid #e5e7eb" }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Product Mix</div>
+                <Chart option={productMixOption} height={280} onEvents={{ click: handleProductMixClick }} />
+                {enableChartDrilldown ? (
+                  <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>Tip: click a series to drill down</div>
+                ) : null}
+              </div>
+            ) : (
+              <div style={{ color: "#6b7280", fontSize: 12 }}>No data for Product Mix.</div>
+            )}
+            {lobOverviewCards.length > 0 ? (
+              <div className="surface" style={{ padding: 12, borderRadius: 12, border: "1px solid #e5e7eb", marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 800 }}>Line of Business Overview</div>
+                    <div style={{ color: "#6b7280", fontSize: 13 }}>LoB-first view with agency comparisons and trends.</div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10 }}>
+                  {lobOverviewCards.map((card) => {
+                    const cardTotal = metric === "premium" ? card.totalPremium : card.totalApps;
+                    const headerColor = LOB_COLORS[card.lob] ?? "#111827";
+                    const agenciesDisplay = card.agencies;
+
+                    const trendSeries = [
+                      {
+                        type: "line",
+                        name: metric === "apps" ? "Apps" : "Premium",
+                        smooth: true,
+                        symbol: "none",
+                        lineStyle: { width: 2, color: "#2563eb" },
+                        areaStyle: { color: "rgba(37,99,235,0.08)" },
+                        data: card.trend.labels.map((label, idx) => ({
+                          value: metric === "apps" ? card.trend.apps[idx] ?? 0 : card.trend.premium[idx] ?? 0,
+                          label,
+                          apps: card.trend.apps[idx] ?? 0,
+                          premium: card.trend.premium[idx] ?? 0,
+                        })),
+                      },
+                    ];
+
+                    const trendOption: EChartsOption = {
+                      tooltip: {
+                        trigger: "axis",
+                        formatter: (params: any) => {
+                          const item = Array.isArray(params) ? params[0] : params;
+                          const datum: any = item?.data ?? {};
+                          const appsVal = typeof datum === "object" ? datum.apps ?? datum.value ?? 0 : item?.data ?? 0;
+                          const premiumVal = typeof datum === "object" ? datum.premium ?? datum.value ?? 0 : item?.data ?? 0;
+                          return `${item.axisValue}<br/>Apps: ${appsVal} ? $${Math.round(premiumVal)}`;
+                        },
+                      },
+                      grid: { left: 28, right: 10, top: 10, bottom: 20 },
+                      xAxis: { type: "category", data: card.trend.labels, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false } },
+                      yAxis: { type: "value", axisLabel: { show: false }, splitLine: { show: false } },
+                      series: trendSeries,
+                    };
+
+                    const handleCardClick = () => {
+                      goToSoldProducts({
+                        lobName: card.lob,
+                        agencyIds: agencyFilter,
+                        statuses: navStatuses,
+                        start: rangeShown.start,
+                        end: rangeShown.end,
+                        customStart,
+                        customEnd,
+                        monthFilter,
+                      });
+                    };
+
+                    const handleTrendClick = (params: any) => {
+                      if (!enableChartDrilldown) return;
+                      params?.event?.event?.stopPropagation?.();
+                      goToSoldProducts({
+                        lobName: card.lob,
+                        agencyIds: agencyFilter,
+                        statuses: navStatuses,
+                        start: rangeShown.start,
+                        end: rangeShown.end,
+                        labels: card.trend.labels,
+                        granularity: "month",
+                        customStart,
+                        customEnd,
+                        monthFilter,
+                      });
+                    };
+
+                    const trendEvents = { onEvents: { click: handleTrendClick } } as any;
+
+                    return (
+                      <div
+                        key={card.lob}
+                        className="surface"
+                        style={{
+                          border: "1px solid #e5e7eb",
+                          borderRadius: 12,
+                          padding: 10,
+                          display: "grid",
+                          gap: 8,
+                          cursor: "pointer",
+                          minHeight: 240,
+                        }}
+                        onClick={handleCardClick}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                          <div style={{ fontWeight: 800, color: headerColor }}>{card.lob}</div>
+                          <div style={{ color: "#475569", fontSize: 12 }}>{metric === "apps" ? "Apps" : "Premium"}</div>
+                        </div>
+                        <div style={{ fontSize: 22, fontWeight: 800 }}>
+                          {metric === "premium" ? `$${Math.round(cardTotal)}` : Math.round(cardTotal)}
+                        </div>
+                        {cardTotal === 0 ? <div style={{ color: "#6b7280", fontSize: 12 }}>No production</div> : null}
+                        <div>
+                          <Chart option={trendOption} height={120} {...trendEvents} />
+                        </div>
+                        <div style={{ display: "grid", gap: 8 }}>
+                          {agenciesDisplay.map((agency) => (
+                            <div key={agency.agencyId} className="surface" style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, alignItems: "center" }}>
+                                <div style={{ fontWeight: 700, fontSize: 13 }}>{agency.agencyName}</div>
+                                <div style={{ color: "#475569", fontSize: 12 }}>
+                                  {metric === "premium"
+                                    ? `$${Math.round(agency.totalPremium)}`
+                                    : `${Math.round(agency.totalApps)} apps`}
+                                </div>
+                              </div>
+                              <div style={{ display: "grid", gap: 4 }}>
+                                {agency.sellers.slice(0, 4).map((s) => (
+                                  <div key={s.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                                    <span>{s.name}</span>
+                                    <span style={{ color: "#475569" }}>
+                                      {metric === "premium" ? `$${Math.round(s.premium)}` : `${Math.round(s.apps)} apps`}
+                                    </span>
+                                  </div>
+                                ))}
+                                {agency.others.apps > 0 || agency.others.premium > 0 ? (
+                                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b7280" }}>
+                                    <span>All others</span>
+                                    <span>
+                                      {metric === "premium"
+                                        ? `$${Math.round(agency.others.premium)}`
+                                        : `${Math.round(agency.others.apps)} apps`}
+                                    </span>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {chartsByGroup.mix.map((id) => renderChartCard(id))}
+          </ChartGroup>
+        ) : null}
+
+        {chartGroups.people ? (
+          <ChartGroup
+            id="people"
+            title="People / Leaderboard"
+            right={
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button type="button" className="btn" onClick={copyTopMoversCsv} disabled={!topMovers}>
+                  Copy Top Movers CSV
+                </button>
+                {topMoversCopied ? <span style={{ fontSize: 12, color: "#166534" }}>Copied</span> : null}
+                {topMoversCopyError ? <span style={{ fontSize: 12, color: "#b91c1c" }}>Copy failed</span> : null}
+              </div>
+            }
+          >
+            {topMovers ? (
+              <div className="surface" style={{ padding: 12, borderRadius: 12, border: "1px solid #e5e7eb", display: "grid", gap: 8 }}>
+                <div style={{ fontWeight: 700 }}>Top Movers (vs previous period)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+                  {[
+                    { title: "Biggest increases", rows: topMovers.increases, color: "#166534" },
+                    { title: "Biggest decreases", rows: topMovers.decreases, color: "#b91c1c" },
+                  ].map((section) => (
+                    <div key={section.title}>
+                      <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6, color: section.color }}>{section.title}</div>
+                      {section.rows.length ? (
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ textAlign: "left", color: "#6b7280" }}>
+                              <th style={{ padding: "4px 0" }}>Person</th>
+                              <th style={{ padding: "4px 0" }}>Current</th>
+                              <th style={{ padding: "4px 0" }}>Previous</th>
+                              <th style={{ padding: "4px 0" }}>Delta</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {section.rows.map((row) => (
+                              <tr key={row.personName}>
+                                <td
+                                  title="Open sold-products drilldown"
+                                  style={{ padding: "6px 0", fontWeight: 600, cursor: "pointer", textDecoration: "none" }}
+                                  role="button"
+                                  tabIndex={0}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.textDecoration = "underline";
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.textDecoration = "none";
+                                  }}
+                                  onClick={() =>
+                                    goToSoldProducts({
+                                      personId: row.personName,
+                                      agencyIds: agenciesParam,
+                                      statuses: navStatuses,
+                                      start: navStart,
+                                      end: navEnd,
+                                      customStart,
+                                      customEnd,
+                                      monthFilter,
+                                    })
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      goToSoldProducts({
+                                        personId: row.personName,
+                                        agencyIds: agenciesParam,
+                                        statuses: navStatuses,
+                                        start: navStart,
+                                        end: navEnd,
+                                        customStart,
+                                        customEnd,
+                                        monthFilter,
+                                      });
+                                    }
+                                  }}
+                                >
+                                  {row.personName}
+                                </td>
+                                <td style={{ padding: "6px 0" }}>{formatMoverValue(row.currentValue)}</td>
+                                <td style={{ padding: "6px 0" }}>{formatMoverValue(row.previousValue)}</td>
+                                <td style={{ padding: "6px 0", color: row.delta >= 0 ? "#166534" : "#b91c1c" }}>
+                                  {formatMoverDelta(row.delta, row.pct)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div style={{ color: "#6b7280", fontSize: 12 }}>No data.</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{ color: "#6b7280", fontSize: 12 }}>No data for Top Movers.</div>
+            )}
+            {chartsByGroup.people.length ? (
+              chartsByGroup.people.map((id) => renderChartCard(id))
+            ) : (
+              <div style={{ color: "#6b7280", fontSize: 12 }}>No charts selected for this group.</div>
+            )}
+          </ChartGroup>
+        ) : null}
+
+        {chartGroups.drilldowns ? (
+          <ChartGroup id="drilldowns" title="Drilldowns">
+            {chartsByGroup.drilldowns.length ? (
+              chartsByGroup.drilldowns.map((id) => renderChartCard(id))
+            ) : (
+              <div style={{ color: "#6b7280", fontSize: 12 }}>No charts selected for this group.</div>
+            )}
+          </ChartGroup>
+        ) : null}
       </div>
     </div>
   );
@@ -1574,6 +2858,11 @@ export function PresetActivityOverview() {
   useEffect(() => {
     fetchActivity({ granularity: "month" }).then((d) => setData(d));
   }, []);
+  const activityTotals = useMemo(() => {
+    const total = (data.series ?? []).reduce((a, b) => a + b, 0);
+    const latest = data.series.length ? data.series[data.series.length - 1] ?? 0 : 0;
+    return { total, latest };
+  }, [data.series]);
   const option: EChartsOption = useMemo(
     () => ({
       tooltip: { trigger: "axis" },
@@ -1587,16 +2876,91 @@ export function PresetActivityOverview() {
   return (
     <div className="surface" style={{ padding: 12, borderRadius: 12 }}>
       <div style={{ fontWeight: 800, marginBottom: 6 }}>Activity Overview</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 8 }}>
+        <div className="surface" style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}>
+          <div style={{ color: "#6b7280", fontSize: 12 }}>Total activities</div>
+          <div style={{ fontWeight: 800 }}>{activityTotals.total}</div>
+        </div>
+        <div className="surface" style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}>
+          <div style={{ color: "#6b7280", fontSize: 12 }}>Latest period</div>
+          <div style={{ fontWeight: 800 }}>{activityTotals.latest}</div>
+        </div>
+      </div>
       <Chart option={option} height={240} />
     </div>
   );
 }
 
-function KPI({ label, value, metric }: { label: string; value: number; metric: string }) {
+function KPI({
+  label,
+  value,
+  metric,
+  onClick,
+  valueDisplay,
+  delta,
+}: {
+  label: string;
+  value: number;
+  metric: string;
+  onClick?: () => void;
+  valueDisplay?: string;
+  delta?: React.ReactNode;
+}) {
+  const displayValue = valueDisplay ?? (metric === "premium" ? `$${Math.round(value)}` : Math.round(value));
   return (
-    <div className="surface" style={{ padding: 12, borderRadius: 12 }}>
+    <div
+      className="surface"
+      style={{ padding: 12, borderRadius: 12, cursor: onClick ? "pointer" : undefined }}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (!onClick) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+    >
       <div style={{ color: "#6b7280", fontSize: 12 }}>{label}</div>
-      <div style={{ fontWeight: 800, fontSize: 20 }}>{metric === "premium" ? `$${Math.round(value)}` : Math.round(value)}</div>
+      <div style={{ fontWeight: 800, fontSize: 20 }}>{displayValue}</div>
+      {delta ? <div style={{ marginTop: 6 }}>{delta}</div> : null}
+    </div>
+  );
+}
+
+function ChartGroup({
+  id,
+  title,
+  right,
+  children,
+}: {
+  id: ChartGroupId;
+  title: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const description = CHART_GROUPS.find((g) => g.id === id)?.description;
+  return (
+    <div
+      className="surface"
+      style={{
+        padding: 12,
+        borderRadius: 12,
+        border: "1px solid #e5e7eb",
+        background: "#fff",
+        display: "grid",
+        gap: 12,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontWeight: 800 }}>{title}</div>
+          {description ? <div style={{ color: "#6b7280", fontSize: 12 }}>{description}</div> : null}
+        </div>
+        {right ? <div>{right}</div> : null}
+      </div>
+      {children}
     </div>
   );
 }

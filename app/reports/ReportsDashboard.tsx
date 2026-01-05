@@ -293,13 +293,9 @@ export default function ReportsDashboard({ data, seedAction }: { data: ReportsDa
             ))}
           </div>
         </div>
-        <form action={seedAction} style={{ display: "grid", gap: 6 }}>
+        <div style={{ display: "grid", gap: 6 }}>
           <div style={{ fontWeight: 700 }}>Sample data</div>
-          <button className="btn" type="submit" title="Create sample Legacy & MOA data if missing">
-            Seed demo agencies
-          </button>
-          <div style={{ color: "#475569", fontSize: 12 }}>Adds faux agencies, people, and production for quick testing.</div>
-        </form>
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>

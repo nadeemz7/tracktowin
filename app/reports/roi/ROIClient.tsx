@@ -1,15 +1,35 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { DateRangePicker } from "@/components/DateRangePicker";
 
-type AgencyOption = { value: string; label: string };
 type LobOption = { id: string; name: string; premiumCategory: string };
 
 type RoiApiResponse = {
-  persons: { id: string; fullName: string; teamType: string; agencyId: string | null }[];
-  personMetrics: Record<string, { premium: number; apps: number; byLob: Record<string, { premium: number; apps: number; name: string; premiumCategory: string }> }>;
-  lobTotals: { id: string; name: string; premiumCategory: string; premium: number; apps: number }[];
-  compByPerson: Record<string, number>;
+  kpis: {
+    revenue: number;
+    salaries: number;
+    commissionsPaid: number;
+    leadSpend: number;
+    net: number;
+    roi: number;
+  };
+  lobRows: Array<{ lob: string; apps: number; premium: number; rate: number | null; revenue: number }>;
+  peopleRows: Array<{
+    personId: string;
+    personName: string;
+    apps: number;
+    premium: number;
+    revenue: number;
+    salary: number;
+    commissionsPaid: number;
+    commissionPaidFromComp?: boolean;
+    leadSpend: number;
+    otherBonusesManual?: number;
+    marketingExpenses?: number;
+    net: number;
+    roi: number;
+  }>;
 };
 
 const STATUS_OPTIONS = ["WRITTEN", "ISSUED", "PAID", "STATUS_CHECK", "CANCELLED"] as const;
@@ -18,14 +38,30 @@ function formatMoney(n: number) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
-function labelCategory(cat: string) {
-  if (cat === "PC") return "P&C";
-  if (cat === "FS") return "Financial Services";
-  if (cat === "IPS") return "IPS";
-  return cat || "All";
+function decimalToPercent(decimal: number): string {
+  if (!decimal || isNaN(decimal)) return "";
+  const pct = decimal * 100;
+  return Number.isInteger(pct) ? String(pct) : pct.toFixed(2);
 }
 
-export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]; lobs: LobOption[] }) {
+function percentInputToDecimal(input: string): number {
+  if (!input) return 0;
+  const cleaned = input.replace("%", "").trim();
+  const n = Number(cleaned);
+  if (isNaN(n)) return 0;
+  return n / 100;
+}
+
+export default function ROIClient({ lobs }: { lobs: LobOption[] }) {
+  const goToSoldProducts = (personId: string, start: string, end: string, statuses: string[]) => {
+    const qs = new URLSearchParams();
+    if (personId) qs.set("personId", personId);
+    if (start) qs.set("start", start);
+    if (end) qs.set("end", end);
+    if (statuses?.length) statuses.forEach((s) => qs.append("statuses", s));
+    window.location.href = `/sold-products?${qs.toString()}`;
+  };
+
   const today = useMemo(() => new Date(), []);
   const startDefault = useMemo(() => {
     const d = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -36,40 +72,54 @@ export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]
     return d.toISOString().slice(0, 10);
   }, [today]);
 
-  const [agencyId, setAgencyId] = useState<string>(agencies[0]?.value || "");
   const [start, setStart] = useState<string>(startDefault);
   const [end, setEnd] = useState<string>(endDefault);
   const [statuses, setStatuses] = useState<string[]>(["WRITTEN", "ISSUED", "PAID"]);
   const [lobRates, setLobRates] = useState<Record<string, number>>({});
-  const [salaryByPerson, setSalaryByPerson] = useState<Record<string, number>>({});
+  const lastSavedRef = useMemo(() => new Map<string, number>(), []);
+  const [monthlyInputs, setMonthlyInputs] = useState<
+    Record<string, { commissionPaid: number; otherBonusesManual: number; marketingExpenses: number }>
+  >({});
   const [data, setData] = useState<RoiApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load persisted rates/salaries per agency
+  // Fetch commission rates for the start date
   useEffect(() => {
-    const rateKey = `roi_rates_${agencyId || "all"}`;
-    const salaryKey = `roi_salary_${agencyId || "all"}`;
-    try {
-      const savedRates = localStorage.getItem(rateKey);
-      if (savedRates) setLobRates(JSON.parse(savedRates));
-      else {
-        const defaults: Record<string, number> = {};
-        lobs.forEach((l) => {
-          const base = l.premiumCategory === "FS" ? 0.15 : l.premiumCategory === "IPS" ? 0.12 : 0.1;
-          defaults[l.id] = base;
-        });
-        setLobRates(defaults);
-      }
-      const savedSalary = localStorage.getItem(salaryKey);
-      if (savedSalary) setSalaryByPerson(JSON.parse(savedSalary));
-      else setSalaryByPerson({});
-    } catch (err) {
-      console.error(err);
-    }
-  }, [agencyId, lobs]);
+    async function loadRates() {
+      try {
+        const res = await fetch(`/api/roi/rates?activeOn=${encodeURIComponent(start)}`);
+        const rows = await res.json();
+        if (Array.isArray(rows)) {
+          const map: Record<string, number> = {};
+          rows.forEach((r: any) => {
+            const lobName = String(r.lob || "").trim();
+            const match = lobs.find((l) => l.name === lobName);
+            if (match) {
+              const decimal = Number(r.rate) || 0;
+              map[match.id] = Math.round(decimal * 10000) / 10000; // store as decimal
+            }
+          });
 
-  // Fetch data
+          // fill defaults for missing
+          lobs.forEach((l) => {
+            if (map[l.id] === undefined) {
+              const base = l.premiumCategory === "FS" ? 0.15 : l.premiumCategory === "IPS" ? 0.12 : 0.1;
+              map[l.id] = base;
+            }
+          });
+
+          setLobRates(map);
+        }
+      } catch (err) {
+        console.error("Failed to load ROI rates", err);
+      }
+    }
+
+    loadRates();
+  }, [start, lobs]);
+
+  // Fetch ROI report data
   useEffect(() => {
     async function load() {
       setLoading(true);
@@ -78,16 +128,26 @@ export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]
         const res = await fetch("/api/reports/roi", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agencyId: agencyId || undefined, start, end, statuses }),
+          body: JSON.stringify({ start, end, statuses }),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`${res.status}: ${text}`);
+        }
         const json = (await res.json()) as RoiApiResponse;
         setData(json);
-        // seed salaries if missing but do not overwrite existing values
-        setSalaryByPerson((prev) => {
+
+        // seed monthly inputs from peopleRows
+        setMonthlyInputs((prev) => {
           const next = { ...prev };
-          json.persons.forEach((p) => {
-            if (next[p.id] === undefined) next[p.id] = 4000;
+          json.peopleRows.forEach((p) => {
+            if (!next[p.personId]) {
+              next[p.personId] = {
+                commissionPaid: p.commissionsPaid ?? 0,
+                otherBonusesManual: p.otherBonusesManual ?? 0,
+                marketingExpenses: p.marketingExpenses ?? 0,
+              };
+            }
           });
           return next;
         });
@@ -98,62 +158,56 @@ export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]
         setLoading(false);
       }
     }
-    load();
-  }, [agencyId, start, end, statuses]);
 
-  // Persist rates/salaries when they change
-  useEffect(() => {
-    const rateKey = `roi_rates_${agencyId || "all"}`;
-    const salaryKey = `roi_salary_${agencyId || "all"}`;
-    try {
-      localStorage.setItem(rateKey, JSON.stringify(lobRates));
-      localStorage.setItem(salaryKey, JSON.stringify(salaryByPerson));
-    } catch (err) {
-      console.error(err);
-    }
-  }, [lobRates, salaryByPerson, agencyId]);
+    load();
+  }, [start, end, statuses]);
 
   const computed = useMemo(() => {
     if (!data) return null;
-    const rateByLob: Record<string, number> = {};
-    lobs.forEach((l) => {
-      rateByLob[l.id] = lobRates[l.id] ?? 0;
-    });
 
-    const rows = data.persons.map((p) => {
-      const m = data.personMetrics[p.id] || { premium: 0, apps: 0, byLob: {} };
-      const revenue = Object.entries(m.byLob).reduce((sum, [lobId, entry]) => sum + entry.premium * (rateByLob[lobId] ?? 0), 0);
-      const comp = data.compByPerson[p.id] ?? 0;
-      const salary = salaryByPerson[p.id] ?? 0;
-      const net = revenue - comp - salary;
-      return { ...p, metrics: m, revenue, comp, salary, net };
-    });
-
-    const totals = rows.reduce(
-      (acc, r) => {
-        acc.premium += r.metrics.premium;
-        acc.apps += r.metrics.apps;
-        acc.revenue += r.revenue;
-        acc.comp += r.comp;
-        acc.salary += r.salary;
-        acc.net += r.net;
-        return acc;
-      },
-      { premium: 0, apps: 0, revenue: 0, comp: 0, salary: 0, net: 0 },
-    );
-    const roi = totals.revenue === 0 ? 0 : (totals.net / totals.revenue) * 100;
-
-    const lobTable = data.lobTotals.map((lob) => {
-      const rate = rateByLob[lob.id] ?? 0;
+    const lobTable = data.lobRows.map((lob) => {
+      const rateDecimal = lobRates[lob.lob] ?? lob.rate ?? 0;
       return {
         ...lob,
-        rate,
-        revenue: lob.premium * rate,
+        rate: rateDecimal,
+        revenue: lob.premium * rateDecimal,
       };
     });
 
-    return { rows, totals, roi, lobTable };
-  }, [data, lobRates, salaryByPerson, lobs]);
+    const kpis = data.kpis;
+
+    const rows = data.peopleRows.map((p) => {
+      const extras = monthlyInputs[p.personId] || {
+        commissionPaid: p.commissionsPaid ?? 0,
+        otherBonusesManual: p.otherBonusesManual ?? 0,
+        marketingExpenses: p.marketingExpenses ?? 0,
+      };
+
+      const otherBonusesAuto = 0; // A6 placeholder (future comp kickers)
+
+      const costs =
+        p.salary +
+        (extras.commissionPaid ?? 0) +
+        p.leadSpend +
+        otherBonusesAuto +
+        (extras.otherBonusesManual ?? 0) +
+        (extras.marketingExpenses ?? 0);
+
+      const net = p.revenue - costs;
+      const roi = costs > 0 ? (net / costs) * 100 : 0;
+
+      return {
+        ...p,
+        commissionsPaid: extras.commissionPaid ?? 0,
+        otherBonusesManual: extras.otherBonusesManual ?? 0,
+        marketingExpenses: extras.marketingExpenses ?? 0,
+        net,
+        roi,
+      };
+    });
+
+    return { lobTable, kpis, rows };
+  }, [data, lobRates, monthlyInputs]);
 
   const toggleStatus = (s: string) => {
     setStatuses((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
@@ -165,26 +219,26 @@ export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", alignItems: "end" }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Agency</span>
-          <select value={agencyId} onChange={(e) => setAgencyId(e.target.value)} style={inputStyle}>
-            <option value="">All agencies</option>
-            {agencies.map((a) => (
-              <option key={a.value} value={a.value}>
-                {a.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Start</span>
-          <input type="date" value={start} onChange={(e) => setStart(e.target.value)} style={inputStyle} />
-        </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>End</span>
-          <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} style={inputStyle} />
-        </label>
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          alignItems: "end",
+        }}
+      >
+        <div style={{ display: "grid", gap: 6, position: "relative" }}>
+          <DateRangePicker
+            label="Written range"
+            start={start}
+            end={end}
+            onChange={(s, e) => {
+              setStart(s);
+              setEnd(e || "");
+            }}
+          />
+        </div>
+
         <div style={{ display: "grid", gap: 8 }}>
           <span style={{ fontWeight: 700 }}>Statuses</span>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -211,17 +265,33 @@ export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]
         </div>
       </div>
 
-      {error && <div style={{ color: "#b91c1c" }}>{error}</div>}
-      {!loading && !data && !error && <div style={{ padding: 12, background: "#f1f5f9", borderRadius: 10 }}>No data for the selected range.</div>}
+      {error && (
+        <div
+          style={{
+            color: "#b91c1c",
+            whiteSpace: "pre-wrap",
+            fontSize: 13,
+            padding: 8,
+            border: "1px solid #fecdd3",
+            borderRadius: 8,
+          }}
+        >
+          {error.slice(0, 500)}
+        </div>
+      )}
+
+      {!loading && !data && !error && (
+        <div style={{ padding: 12, background: "#f1f5f9", borderRadius: 10 }}>No data for the selected range.</div>
+      )}
 
       {computed && (
         <>
           <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
-            <StatCard label="Revenue" value={computed.totals.revenue} color="#166534" />
-            <StatCard label="Salaries" value={-computed.totals.salary} color="#b45309" />
-            <StatCard label="Commissions" value={-computed.totals.comp} color="#b45309" />
-            <StatCard label="Net" value={computed.totals.net} color={computed.totals.net >= 0 ? "#166534" : "#b91c1c"} />
-            <StatCard label="ROI" value={computed.roi} suffix="%" color="#2563eb" />
+            <StatCard label="Revenue" value={computed.kpis.revenue} color="#166534" />
+            <StatCard label="Salaries" value={-computed.kpis.salaries} color="#b45309" />
+            <StatCard label="Commissions" value={-computed.kpis.commissionsPaid} color="#b45309" />
+            <StatCard label="Net" value={computed.kpis.net} color={computed.kpis.net >= 0 ? "#166534" : "#b91c1c"} />
+            <StatCard label="ROI" value={(computed.kpis.roi ?? 0) * 100} suffix="%" color="#2563eb" />
           </div>
 
           <section style={{ display: "grid", gap: 8 }}>
@@ -239,19 +309,41 @@ export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]
                 </thead>
                 <tbody>
                   {computed.lobTable.map((lob) => (
-                    <tr key={lob.id}>
+                    <tr key={lob.lob}>
                       <td style={tdStyle}>
-                        <div style={{ fontWeight: 700 }}>{lob.name}</div>
-                        <div style={{ fontSize: 12, color: "#475569" }}>{labelCategory(lob.premiumCategory)}</div>
+                        <div style={{ fontWeight: 700 }}>{lob.lob}</div>
                       </td>
                       <td style={tdStyle}>{formatMoney(lob.premium)}</td>
                       <td style={tdStyle}>{lob.apps}</td>
                       <td style={tdStyle}>
                         <input
                           type="number"
-                          step="0.01"
-                          value={lobRates[lob.id] ?? 0}
-                          onChange={(e) => setLobRates({ ...lobRates, [lob.id]: Number(e.target.value) })}
+                          step="0.1"
+                          value={decimalToPercent(lobRates[lob.lob] ?? lob.rate ?? 0)}
+                          onChange={(e) => {
+                            const decimal = percentInputToDecimal(e.target.value);
+                            setLobRates({ ...lobRates, [lob.lob]: decimal });
+                          }}
+                          onBlur={async (e) => {
+                            const decimal = percentInputToDecimal(e.target.value);
+                            const lastSaved = lastSavedRef.get(lob.lob);
+                            if (lastSaved !== undefined && Math.abs(lastSaved - decimal) < 1e-6) return;
+                            try {
+                              await fetch("/api/roi/rates", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  lob: lob.lob,
+                                  rate: decimal,
+                                  effectiveStart: start,
+                                  effectiveEnd: null,
+                                }),
+                              });
+                              lastSavedRef.set(lob.lob, decimal);
+                            } catch (err) {
+                              console.error("Failed to save rate", err);
+                            }
+                          }}
                           style={{ ...inputStyle, maxWidth: 90 }}
                         />
                       </td>
@@ -274,39 +366,152 @@ export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]
                     <th style={thStyle}>Premium</th>
                     <th style={thStyle}>Revenue</th>
                     <th style={thStyle}>Salary</th>
-                    <th style={thStyle}>Commission</th>
+                    <th style={thStyle}>Commission Paid</th>
+                    <th style={thStyle}>Other bonuses (auto)</th>
+                    <th style={thStyle}>Other bonuses (manual)</th>
+                    <th style={thStyle}>Marketing expenses</th>
                     <th style={thStyle}>Net</th>
+                    <th style={thStyle}>ROI</th>
                   </tr>
                 </thead>
                 <tbody>
                   {computed.rows.length === 0 && (
                     <tr>
-                      <td colSpan={7} style={{ ...tdStyle, textAlign: "center", color: "#475569" }}>
+                      <td colSpan={11} style={{ ...tdStyle, textAlign: "center", color: "#475569" }}>
                         No people found in this range.
                       </td>
                     </tr>
                   )}
+
                   {computed.rows.map((r) => (
-                    <tr key={r.id}>
+                    <tr key={r.personId}>
                       <td style={tdStyle}>
-                        <div style={{ fontWeight: 800 }}>{r.fullName}</div>
-                        <div style={{ fontSize: 12, color: "#475569" }}>{r.teamType}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                          <span style={{ fontSize: 12, color: "#475569" }}>Salary</span>
-                          <input
-                            type="number"
-                            value={salaryByPerson[r.id] ?? 0}
-                            onChange={(e) => setSalaryByPerson({ ...salaryByPerson, [r.id]: Number(e.target.value) })}
-                            style={{ ...inputStyle, maxWidth: 110 }}
-                          />
+                        <div
+                          style={{ fontWeight: 800, cursor: "pointer", textDecoration: "underline" }}
+                          onClick={() => {
+                            window.location.href = `/reports/roi/person/${encodeURIComponent(r.personId)}`;
+                          }}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              window.location.href = `/reports/roi/person/${encodeURIComponent(r.personId)}`;
+                            }
+                          }}
+                        >
+                          {r.personName}
                         </div>
                       </td>
-                      <td style={tdStyle}>{r.metrics.apps}</td>
-                      <td style={tdStyle}>{formatMoney(r.metrics.premium)}</td>
-                      <td style={tdStyle}>{formatMoney(r.revenue)}</td>
+
+                      <td
+                        style={{ ...tdStyle, cursor: "pointer", textDecoration: "underline" }}
+                        onClick={() => goToSoldProducts(r.personId, start, end, statuses)}
+                      >
+                        {r.apps}
+                      </td>
+
+                      <td style={tdStyle}>{formatMoney(r.premium)}</td>
+
+                      <td
+                        style={{ ...tdStyle, cursor: "pointer", textDecoration: "underline" }}
+                        onClick={() => goToSoldProducts(r.personId, start, end, statuses)}
+                      >
+                        {formatMoney(r.revenue)}
+                      </td>
+
                       <td style={tdStyle}>{formatMoney(r.salary)}</td>
-                      <td style={tdStyle}>{formatMoney(r.comp)}</td>
-                      <td style={{ ...tdStyle, fontWeight: 800, color: r.net >= 0 ? "#166534" : "#b91c1c" }}>{formatMoney(r.net)}</td>
+
+                      <td style={tdStyle}>
+                        <div>{formatMoney(r.commissionsPaid)}</div>
+                        {r.commissionPaidFromComp ? (
+                          <div style={{ color: "#475569", fontSize: 12, marginTop: 2 }}>(from comp)</div>
+                        ) : null}
+                      </td>
+
+                      <td style={tdStyle}>{formatMoney(0)}</td>
+
+                      <td style={tdStyle}>
+                        <input
+                          type="number"
+                          value={monthlyInputs[r.personId]?.otherBonusesManual ?? 0}
+                          onChange={(e) => {
+                            const val = Number(e.target.value) || 0;
+                            setMonthlyInputs((prev) => ({
+                              ...prev,
+                              [r.personId]: {
+                                ...(prev[r.personId] || {}),
+                                otherBonusesManual: val,
+                                commissionPaid: prev[r.personId]?.commissionPaid ?? r.commissionsPaid,
+                                marketingExpenses: prev[r.personId]?.marketingExpenses ?? 0,
+                              },
+                            }));
+                          }}
+                          onBlur={async (e) => {
+                            const val = Number(e.target.value) || 0;
+                            try {
+                              await fetch("/api/roi/monthly-inputs", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  personId: r.personId,
+                                  month: start.slice(0, 7),
+                                  commissionPaid: monthlyInputs[r.personId]?.commissionPaid ?? r.commissionsPaid,
+                                  otherBonusesManual: val,
+                                  marketingExpenses: monthlyInputs[r.personId]?.marketingExpenses ?? 0,
+                                }),
+                              });
+                            } catch (err) {
+                              console.error("Failed to save monthly input", err);
+                            }
+                          }}
+                          style={{ ...inputStyle, maxWidth: 110 }}
+                        />
+                      </td>
+
+                      <td style={tdStyle}>
+                        <input
+                          type="number"
+                          value={monthlyInputs[r.personId]?.marketingExpenses ?? 0}
+                          onChange={(e) => {
+                            const val = Number(e.target.value) || 0;
+                            setMonthlyInputs((prev) => ({
+                              ...prev,
+                              [r.personId]: {
+                                ...(prev[r.personId] || {}),
+                                marketingExpenses: val,
+                                commissionPaid: prev[r.personId]?.commissionPaid ?? r.commissionsPaid,
+                                otherBonusesManual: prev[r.personId]?.otherBonusesManual ?? 0,
+                              },
+                            }));
+                          }}
+                          onBlur={async (e) => {
+                            const val = Number(e.target.value) || 0;
+                            try {
+                              await fetch("/api/roi/monthly-inputs", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  personId: r.personId,
+                                  month: start.slice(0, 7),
+                                  commissionPaid: monthlyInputs[r.personId]?.commissionPaid ?? r.commissionsPaid,
+                                  otherBonusesManual: monthlyInputs[r.personId]?.otherBonusesManual ?? 0,
+                                  marketingExpenses: val,
+                                }),
+                              });
+                            } catch (err) {
+                              console.error("Failed to save monthly input", err);
+                            }
+                          }}
+                          style={{ ...inputStyle, maxWidth: 110 }}
+                        />
+                      </td>
+
+                      <td style={{ ...tdStyle, fontWeight: 800, color: r.net >= 0 ? "#166534" : "#b91c1c" }}>
+                        {formatMoney(r.net)}
+                      </td>
+
+                      <td style={tdStyle}>{r.roi.toFixed(1)}%</td>
                     </tr>
                   ))}
                 </tbody>
@@ -322,7 +527,15 @@ export default function ROIClient({ agencies, lobs }: { agencies: AgencyOption[]
 function StatCard({ label, value, color, suffix = "" }: { label: string; value: number; color: string; suffix?: string }) {
   const display = suffix === "%" ? `${value.toFixed(1)}%` : formatMoney(value);
   return (
-    <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff", boxShadow: "0 4px 20px rgba(0,0,0,0.04)" }}>
+    <div
+      style={{
+        border: "1px solid #e5e7eb",
+        borderRadius: 12,
+        padding: 12,
+        background: "#fff",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.04)",
+      }}
+    >
       <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 900, color }}>{display}</div>
     </div>

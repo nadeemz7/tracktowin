@@ -1,58 +1,114 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { startOfDay, startOfWeek, startOfMonth, format } from "date-fns";
+import { addMonths, format, startOfMonth } from "date-fns";
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
-  const {
-    start,
-    end,
-    granularity = "month",
-    activityNames = [],
-    personIds = [],
-    dimension = "activity",
-  } = body || {};
+  const { activityTypeId, personIds = [], start, end, granularity = "month" } = body || {};
 
-  const startDate = start ? new Date(start) : new Date("2000-01-01");
+  if (granularity !== "month") {
+    return NextResponse.json({ error: "Only monthly granularity is supported" }, { status: 400 });
+  }
+
+  // orgId lookup placeholder (aligns with existing patterns that may pass an org header)
+  const orgId = req.headers.get("x-org-id")?.trim() || undefined;
+
+  const startDate = start ? new Date(start) : startOfMonth(addMonths(new Date(), -11));
   const endDate = end ? new Date(end) : new Date();
 
-  const rows = await prisma.activityRecord.findMany({
+  if (!activityTypeId) {
+    // Legacy fallback: aggregate ActivityRecord counts monthly into a single series
+    const records = await prisma.activityRecord.findMany({
+      where: {
+        activityDate: { gte: startOfMonth(startDate), lte: endDate },
+        ...(Array.isArray(personIds) && personIds.length ? { personId: { in: personIds } } : {}),
+      },
+    });
+    const totals = Array(labels.length).fill(0);
+    records.forEach((r) => {
+      const key = format(startOfMonth(r.activityDate), "yyyy-MM");
+      const idx = labels.indexOf(key);
+      if (idx !== -1) totals[idx] = (totals[idx] || 0) + (r.count || 0);
+    });
+    return NextResponse.json({ labels, series: totals });
+  }
+
+  const activityType = await prisma.activityType.findFirst({
     where: {
-      activityDate: { gte: startDate, lte: endDate },
-      ...(activityNames.length ? { activityName: { in: activityNames } } : {}),
-      ...(personIds.length ? { personId: { in: personIds } } : {}),
+      id: activityTypeId,
+      ...(orgId ? { orgId } : {}),
+      OR: [{ isActive: true }, { active: true }],
+    },
+  });
+  if (activityType && orgId && activityType.orgId && activityType.orgId !== orgId) {
+    return NextResponse.json({ error: "Activity type not found" }, { status: 404 });
+  }
+  if (!activityType) return NextResponse.json({ error: "Activity type not found" }, { status: 404 });
+
+  const labels: string[] = [];
+  let cursor = startOfMonth(startDate);
+  const endMonth = startOfMonth(endDate);
+  while (cursor <= endMonth) {
+    labels.push(format(cursor, "yyyy-MM"));
+    cursor = addMonths(cursor, 1);
+  }
+
+  const peopleFilter = Array.isArray(personIds) ? personIds.filter(Boolean) : [];
+
+  const events = await prisma.activityEvent.findMany({
+    where: {
+      activityTypeId: activityType.id,
+      occurredAt: { gte: startOfMonth(startDate), lte: endDate },
+      ...(peopleFilter.length ? { personId: { in: peopleFilter } } : {}),
     },
     include: { person: true },
   });
 
-  const bucket = (d: Date) => {
-    if (granularity === "day") return format(startOfDay(d), "yyyy-MM-dd");
-    if (granularity === "week") return format(startOfWeek(d), "yyyy-MM-dd");
-    return format(startOfMonth(d), "yyyy-MM");
-  };
+  const personIdsSet = new Set<string>(peopleFilter);
+  events.forEach((e) => personIdsSet.add(e.personId));
 
-  const seriesMap = new Map<string, Map<string, number>>();
-  const totals = { count: 0 };
+  const people =
+    personIdsSet.size > 0
+      ? await prisma.person.findMany({
+          where: { id: { in: Array.from(personIdsSet) } },
+          select: { id: true, fullName: true },
+        })
+      : [];
+  const personNameMap = new Map<string, string>();
+  people.forEach((p) => personNameMap.set(p.id, p.fullName));
 
-  const seriesKey = (r: typeof rows[number]) => {
-    if (dimension === "person") return r.person?.fullName || r.personName || "Unassigned";
-    return r.activityName || "Unknown";
-  };
+  const seriesMap = new Map<string, number[]>();
+  personIdsSet.forEach((pid) => seriesMap.set(pid, Array(labels.length).fill(0)));
+  events.forEach((event) => {
+    const key = format(startOfMonth(event.occurredAt), "yyyy-MM");
+    const idx = labels.indexOf(key);
+    if (idx === -1) return;
+    const arr = seriesMap.get(event.personId) || Array(labels.length).fill(0);
+    arr[idx] = (arr[idx] || 0) + 1;
+    seriesMap.set(event.personId, arr);
+  });
 
-  for (const r of rows) {
-    const timeKey = bucket(r.activityDate);
-    const dimKey = seriesKey(r);
-    if (!seriesMap.has(dimKey)) seriesMap.set(dimKey, new Map());
-    const timeMap = seriesMap.get(dimKey)!;
-    timeMap.set(timeKey, (timeMap.get(timeKey) || 0) + r.count);
-    totals.count += r.count;
-  }
+  const targets = await prisma.activityTarget.findMany({
+    where: {
+      activityTypeId: activityType.id,
+      ...(personIdsSet.size ? { personId: { in: Array.from(personIdsSet) } } : {}),
+    },
+  });
+  const targetsMap = targets.reduce<Record<string, number>>((acc, t) => {
+    acc[t.personId] = t.monthlyMinimum ?? 0;
+    return acc;
+  }, {});
 
-  const labels = Array.from(new Set(Array.from(seriesMap.values()).flatMap((m) => Array.from(m.keys())))).sort();
-  const series = Array.from(seriesMap.entries()).map(([name, timeMap]) => ({
-    name,
-    data: labels.map((l) => timeMap.get(l) || 0),
+  const series = Array.from(seriesMap.entries()).map(([personId, data]) => ({
+    personId,
+    personName: personNameMap.get(personId) || personId,
+    data,
   }));
 
-  return NextResponse.json({ labels, series, totals });
+  return NextResponse.json({
+    labels,
+    series,
+    targets: targetsMap,
+    activityType: { id: activityType.id, name: activityType.name },
+  });
 }

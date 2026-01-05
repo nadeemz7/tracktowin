@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { PresetProductionOverview, PresetActivityOverview } from "./PresetsClient";
+import { useEffect, useMemo, useState } from "react";
+import { endOfMonth, startOfMonth, subMonths } from "date-fns";
+import ProductTrendsClient from "./product-trends/ProductTrendsClient";
+import { PresetProductionOverview } from "./PresetsClient";
+import ActivityDashboard from "./activity/ActivityDashboard";
 
 type AgencyOpt = { id: string; name: string };
 
@@ -14,6 +17,132 @@ type Card = {
   render: () => JSX.Element;
 };
 
+const STATUS_OPTIONS = ["WRITTEN", "ISSUED", "PAID", "STATUS_CHECK", "CANCELLED"] as const;
+
+function ProductTrendsInlinePreview({ agencies }: { agencies: AgencyOpt[] }) {
+  const [metric, setMetric] = useState<"premium" | "apps">("premium");
+  const [quickRange, setQuickRange] = useState<"" | "quarter" | "year">("");
+  const [topN, setTopN] = useState(8);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(["WRITTEN", "ISSUED", "PAID"]);
+  const [selectedAgencies, setSelectedAgencies] = useState<string[]>([]);
+  const [data, setData] = useState<{ labels: string[]; series: { name: string; data: number[] }[] }>({ labels: [], series: [] });
+  const [loading, setLoading] = useState(true);
+
+  const computeRange = () => {
+    const now = new Date();
+    if (quickRange === "quarter") {
+      return { start: startOfMonth(subMonths(now, 2)).toISOString(), end: endOfMonth(now).toISOString() };
+    }
+    if (quickRange === "year") {
+      return { start: startOfMonth(new Date(now.getFullYear(), 0, 1)).toISOString(), end: endOfMonth(now).toISOString() };
+    }
+    return { start: startOfMonth(subMonths(now, 5)).toISOString(), end: endOfMonth(now).toISOString() };
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    const { start, end } = computeRange();
+    fetch("/api/reports/production", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dimension: "product",
+        granularity: "month",
+        metric,
+        start,
+        end,
+        statuses: selectedStatuses,
+        topN,
+        agencies: selectedAgencies.length ? selectedAgencies : undefined,
+      }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        setData({ labels: res.labels || [], series: res.series || [] });
+      })
+      .catch(() => {
+        setData({ labels: [], series: [] });
+      })
+      .finally(() => setLoading(false));
+  }, [metric, quickRange, topN, selectedStatuses, selectedAgencies]);
+
+  if (loading) {
+    return (
+      <div className="surface" style={{ padding: 12, borderRadius: 12, color: "#6b7280" }}>
+        Loading product trends…
+      </div>
+    );
+  }
+
+  const safeSeries = Array.isArray((data as any)?.series) ? (data as any).series : [];
+  const seriesWithTotals = safeSeries.map((s: { name: string; data: number[] }) => ({
+    ...s,
+    total: (Array.isArray(s.data) ? s.data : []).reduce((a, b) => a + b, 0),
+  }));
+
+  const toggleStatus = (st: string) =>
+    setSelectedStatuses((prev) => (prev.includes(st) ? prev.filter((s) => s !== st) : [...prev, st]));
+
+  const toggleAgency = (id: string) =>
+    setSelectedAgencies((prev) => (prev.includes(id) ? prev.filter((a) => a !== id) : [...prev, id]));
+
+  return (
+    <div className="surface" style={{ padding: 12, borderRadius: 12, display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <span style={{ color: "#475569" }}>Metric</span>
+          <select className="select" value={metric} onChange={(e) => setMetric(e.target.value as "premium" | "apps")} style={{ minHeight: 30 }}>
+            <option value="premium">Premium</option>
+            <option value="apps">Apps</option>
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <span style={{ color: "#475569" }}>Quick range</span>
+          <select className="select" value={quickRange} onChange={(e) => setQuickRange(e.target.value as any)} style={{ minHeight: 30 }}>
+            <option value="">Last 6 months</option>
+            <option value="quarter">Last 3 months</option>
+            <option value="year">This year</option>
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <span style={{ color: "#475569" }}>Top N</span>
+          <input
+            className="input"
+            type="number"
+            min={1}
+            value={topN}
+            onChange={(e) => setTopN(Math.max(1, Number(e.target.value) || 1))}
+            style={{ width: 70, minHeight: 30 }}
+          />
+        </label>
+        <details style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 12 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700, color: "#111827" }}>Statuses</summary>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            {STATUS_OPTIONS.map((st) => (
+              <label key={st} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <input type="checkbox" checked={selectedStatuses.includes(st)} onChange={() => toggleStatus(st)} />
+                {st}
+              </label>
+            ))}
+          </div>
+        </details>
+        <details style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 12 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700, color: "#111827" }}>Agencies</summary>
+          <div style={{ display: "grid", gap: 4, marginTop: 6, maxHeight: 200, overflow: "auto" }}>
+            {agencies.map((a) => (
+              <label key={a.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <input type="checkbox" checked={selectedAgencies.includes(a.id)} onChange={() => toggleAgency(a.id)} />
+                {a.name}
+              </label>
+            ))}
+          </div>
+        </details>
+      </div>
+      <ProductTrendsClient metric={metric} labels={data?.labels || []} series={seriesWithTotals} />
+    </div>
+  );
+}
+
 export default function ReportsHubClient({ agencies }: { agencies: AgencyOpt[] }) {
   const cards: Card[] = useMemo(
     () => [
@@ -23,7 +152,7 @@ export default function ReportsHubClient({ agencies }: { agencies: AgencyOpt[] }
         desc: "Premium and apps this month by LoB with KPIs.",
         color: "#2563eb",
         openHref: "/reports/production",
-        render: () => <PresetProductionOverview agencies={agencies} />,
+        render: () => <PresetProductionOverview agencies={agencies} variant="inline" />,
       },
       {
         id: "products",
@@ -31,11 +160,7 @@ export default function ReportsHubClient({ agencies }: { agencies: AgencyOpt[] }
         desc: "Top products over time with Premium/Apps toggle.",
         color: "#0ea5e9",
         openHref: "/reports/product-trends",
-        render: () => (
-          <div className="surface" style={{ padding: 12, borderRadius: 12, color: "#6b7280" }}>
-            Open to see top-N product trends (line chart) with premium/apps toggle.
-          </div>
-        ),
+        render: () => <ProductTrendsInlinePreview agencies={agencies} />,
       },
       {
         id: "business",
@@ -67,7 +192,7 @@ export default function ReportsHubClient({ agencies }: { agencies: AgencyOpt[] }
         desc: "Team/person activities with totals and time series.",
         color: "#f97316",
         openHref: "/reports/activity",
-        render: () => <PresetActivityOverview />,
+        render: () => <ActivityDashboard variant="inline" />,
       },
       {
         id: "wtd",

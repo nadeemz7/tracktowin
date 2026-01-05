@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function AdminIndexPage({ searchParams }: { searchParams?: { q?: string } }) {
   const q = searchParams?.q?.toString().trim() || "";
 
-  const impersonateId = readCookie("impersonatePersonId");
+  const impersonateId = await readCookie("impersonatePersonId");
   const impersonated = impersonateId
     ? await prisma.person.findUnique({
         where: { id: impersonateId },

@@ -501,7 +501,7 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
   const startDate = startOfMonth(new Date(year, monthIdx, 1));
   const endDate = endOfMonth(startDate);
 
-  const cookiePersonId = readCookie("impersonatePersonId") || "";
+  const cookiePersonId = (await readCookie("impersonatePersonId")) || "";
 
   let people = await prisma.person.findMany({ orderBy: { fullName: "asc" } });
   if (cookiePersonId && !people.some((p) => p.id === cookiePersonId)) {

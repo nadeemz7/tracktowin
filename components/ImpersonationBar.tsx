@@ -11,6 +11,8 @@ type Person = {
   agencyOwner?: string | null;
 };
 
+const VIEW_AS_COLLAPSE_KEY = "ttw_view_as_collapsed";
+
 async function fetchJSON<T>(url: string) {
   const res = await fetch(url);
   if (!res.ok) throw new Error("Request failed");
@@ -22,9 +24,15 @@ export function ImpersonationBar() {
   const [people, setPeople] = useState<Person[]>([]);
   const [current, setCurrent] = useState<Person | null>(null);
   const [loading, setLoading] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const stored = window.localStorage.getItem(VIEW_AS_COLLAPSE_KEY);
+      if (stored === "0") setCollapsed(false);
+      if (stored === "1") setCollapsed(true);
+    }
+
     // hydrate current impersonation + initial list
     fetchJSON<{ person: Person | null }>("/api/admin/impersonate")
       .then((data) => setCurrent(data.person ?? null))
@@ -102,7 +110,15 @@ export function ImpersonationBar() {
     >
       <div
         style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, cursor: "pointer" }}
-        onClick={() => setCollapsed((v) => !v)}
+        onClick={() =>
+          setCollapsed((v) => {
+            const next = !v;
+            if (typeof window !== "undefined") {
+              window.localStorage.setItem(VIEW_AS_COLLAPSE_KEY, next ? "1" : "0");
+            }
+            return next;
+          })
+        }
       >
         <div style={{ fontWeight: 700, fontSize: 13 }}>View as (admin)</div>
         <div style={{ fontSize: 12, color: "#6b7280" }}>{collapsed ? "Expand" : "Collapse"}</div>

@@ -25,6 +25,7 @@ model Agency {
   premiumBuckets            PremiumBucket[]
   productionExpectations    ProductionExpectation[]
   reportPresets             ReportPreset[]
+  benchOfficePlans          BenchOfficePlan[]
   soldProducts              SoldProduct[]
   teams                     Team[]
   valuePolicyDefaults       ValuePolicyDefault[]
@@ -162,8 +163,8 @@ model Person {
   isManager            Boolean                        @default(false)
   createdAt            DateTime                       @default(now())
   updatedAt            DateTime                       @updatedAt
-  activityRecords      ActivityRecord[]
   activityEvents       ActivityEvent[]
+  activityRecords      ActivityRecord[]
   activityTargets      ActivityTarget[]
   createdActivityTypes ActivityType[]
   commissionPlans      CommissionPlan[]
@@ -171,10 +172,11 @@ model Person {
   primaryAgency        Agency?                        @relation("PrimaryAgency", fields: [primaryAgencyId], references: [id])
   role                 Role?                          @relation(fields: [roleId], references: [id])
   team                 Team?                          @relation(fields: [teamId], references: [id])
-  soldProducts         SoldProduct[]
   roiCompPlans         RoiCompPlan[]
   roiMonthlyInputs     RoiMonthlyInputs[]
+  soldProducts         SoldProduct[]
   winAssignments       WinTheDayPlanPersonAssignment?
+  benchOverride        BenchPersonOverride?
 }
 
 model MarketingSourceOption {
@@ -250,6 +252,7 @@ model Role {
   people                 Person[]
   productionExpectations ProductionExpectation[]
   team                   Team                    @relation(fields: [teamId], references: [id])
+  benchExpectation       BenchRoleExpectation?
 
   @@unique([teamId, name])
 }
@@ -341,13 +344,9 @@ model CommissionPlanAssignment {
 model ActivityType {
   id                     String                     @id @default(cuid())
   agencyId               String?
-  orgId                  String?
   name                   String
-  category               String?
   description            String?
   active                 Boolean                    @default(true)
-  isActive               Boolean                    @default(true)
-  createdByPersonId      String?
   inputMode              ActivityInputMode          @default(COUNT)
   unitLabel              String?
   requiresFullName       Boolean                    @default(false)
@@ -359,15 +358,19 @@ model ActivityType {
   groupingHint           ActivityGroupingHint?
   createdAt              DateTime                   @default(now())
   updatedAt              DateTime                   @updatedAt
+  orgId                  String?
+  category               String?
+  isActive               Boolean                    @default(true)
+  createdByPersonId      String?
   expectations           ActivityDailyExpectation[]
+  events                 ActivityEvent[]
   payoutTiers            ActivityPayoutTier[]
+  targets                ActivityTarget[]
   visibilities           ActivityTeamVisibility[]
   agency                 Agency?                    @relation(fields: [agencyId], references: [id])
+  createdByPerson        Person?                    @relation(fields: [createdByPersonId], references: [id])
   productionExpectations ProductionExpectation[]
   winRules               WinTheDayRule[]
-  createdByPerson        Person?                    @relation(fields: [createdByPersonId], references: [id])
-  targets                ActivityTarget[]
-  events                 ActivityEvent[]
 
   @@unique([agencyId, name])
   @@index([agencyId, active])
@@ -693,6 +696,21 @@ model ReportPreset {
   @@index([agencyId])
 }
 
+model ReportSnapshot {
+  id          String   @id @default(cuid())
+  reportType  String
+  createdAt   DateTime @default(now())
+  startISO    String
+  endISO      String
+  statusesCSV String
+  payloadJson Json
+  metaJson    Json?
+  title       String?  @db.VarChar(140)
+
+  @@index([reportType, createdAt])
+  @@index([reportType, startISO, endISO])
+}
+
 model RoiCommissionRate {
   id             String    @id @default(cuid())
   orgId          String
@@ -726,18 +744,64 @@ model RoiMonthlyInputs {
   id                 String   @id @default(cuid())
   orgId              String
   personId           String
-  month              String // YYYY-MM
+  month              String
   commissionPaid     Float
   leadSpend          Float?
-  otherBonusesManual Float?   @default(0)
-  marketingExpenses  Float?   @default(0)
   notes              String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+  otherBonusesManual Float?   @default(0)
+  marketingExpenses  Float?   @default(0)
   person             Person   @relation(fields: [personId], references: [id])
 
   @@unique([orgId, personId, month])
   @@index([orgId, month])
+}
+
+model BenchOfficePlan {
+  id                   String             @id @default(cuid())
+  agencyId             String
+  year                 Int
+  appsAnnualTarget     Int
+  premiumAnnualTarget  Float
+  premiumMode          PremiumTargetMode
+  premiumByLob         Json?
+  premiumByBucket      Json?
+  appGoalsByLobJson    Json?
+  premiumByBucketJson  Json?
+  premiumFsBreakdownJson Json?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  agency               Agency             @relation(fields: [agencyId], references: [id])
+
+  @@unique([agencyId, year])
+  @@index([agencyId])
+}
+
+model BenchRoleExpectation {
+  id                    String             @id @default(cuid())
+  roleId                String             @unique
+  monthlyAppsTarget     Int
+  monthlyPremiumTarget  Float
+  premiumMode           PremiumTargetMode
+  premiumByLob          Json?
+  premiumByBucket       Json?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  role                  Role               @relation(fields: [roleId], references: [id])
+}
+
+model BenchPersonOverride {
+  id                      String             @id @default(cuid())
+  personId                String             @unique
+  monthlyAppsOverride     Int?
+  monthlyPremiumOverride  Float?
+  premiumModeOverride     PremiumTargetMode?
+  premiumByLobOverride    Json?
+  premiumByBucketOverride Json?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  person                  Person             @relation(fields: [personId], references: [id])
 }
 
 enum PremiumCategory {
@@ -872,6 +936,11 @@ enum ActivityGroupingHint {
 enum WinSourceType {
   ACTIVITY
   WRITTEN_APPS
+}
+
+enum PremiumTargetMode {
+  LOB
+  BUCKET
 }
 
 enum CommissionScope {

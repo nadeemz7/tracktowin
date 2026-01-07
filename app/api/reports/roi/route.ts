@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { endOfMonth, format, startOfMonth } from "date-fns";
-import { getViewerContext } from "@/lib/getViewerContext";
-import { canAccessRoiReport } from "@/lib/permissions";
+import { getLastViewerDebug, getViewerContext } from "@/lib/getViewerContext";
 
 type RequestBody = {
   start?: string;
@@ -35,14 +34,26 @@ function ensureRoiModels() {
 
 export async function POST(req: Request) {
   try {
-    const ctx = await getViewerContext(req);
-    if (!ctx || !ctx.orgId || !canAccessRoiReport(ctx)) {
-      if (process.env.NODE_ENV !== "production" && !ctx) {
-        console.warn("[ROI Report API] Missing viewer context for /api/reports/roi");
-      }
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const viewer = await getViewerContext(req);
+    const isAllowed = viewer && (viewer.isAdmin || viewer.isManager || viewer.isOwner);
+    // IMPORTANT: ROI API auth must match client viewer context.
+    // Do not use next/headers cookies here.
+    if (!isAllowed) {
+      return NextResponse.json(
+        {
+          error: "Unauthorized",
+          debug: {
+            viewer,
+            hasCookieHeader: Boolean(req.headers.get("cookie")),
+            viewerDebug: process.env.NODE_ENV !== "production" ? getLastViewerDebug() : undefined,
+          },
+        },
+        { status: 401 }
+      );
     }
-    const orgId = ctx.orgId;
+
+    const orgId = viewer?.orgId;
 
     ensureRoiModels();
 
@@ -52,19 +63,34 @@ export async function POST(req: Request) {
     const statuses = Array.isArray(body.statuses) ? body.statuses.filter((s) => typeof s === "string") : [];
     const personIds = Array.isArray(body.personIds) ? body.personIds.filter((p) => typeof p === "string") : [];
 
-    // rates map: latest effective per lob for the range start
+    // Pull all commission rates that could touch the selected range.
     const rates = await prisma.roiCommissionRate.findMany({
       where: {
         orgId,
-        effectiveStart: { lte: start },
+        effectiveStart: { lte: end },
         OR: [{ effectiveEnd: null }, { effectiveEnd: { gte: start } }],
       },
       orderBy: [{ lob: "asc" }, { effectiveStart: "desc" }],
     });
 
-    const rateMap = new Map<string, number>();
+    const ratesByLob = new Map<string, typeof rates>();
     rates.forEach((r) => {
-      if (!rateMap.has(r.lob)) rateMap.set(r.lob, r.rate ?? 0);
+      const list = ratesByLob.get(r.lob) || [];
+      list.push(r);
+      ratesByLob.set(r.lob, list);
+    });
+
+    // rates map: latest effective per lob for the range start (preserves current behavior)
+    const rateMap = new Map<string, number>();
+    ratesByLob.forEach((list, lob) => {
+      const match = list.find(
+        (r) =>
+          r.effectiveStart <= start &&
+          (r.effectiveEnd === null || r.effectiveEnd === undefined || r.effectiveEnd >= start)
+      );
+      if (match) {
+        rateMap.set(lob, match.rate ?? 0);
+      }
     });
 
     // pull sold products
@@ -110,13 +136,24 @@ export async function POST(req: Request) {
     });
 
     // months in range
-    const months: string[] = [];
+    const monthBounds: Array<{ key: string; monthStart: Date; monthEnd: Date; rangeStart: Date; rangeEnd: Date }> = [];
     let cursor = startOfMonth(start);
     const endMonth = startOfMonth(end);
     while (cursor <= endMonth) {
-      months.push(monthKey(cursor));
+      const monthStart = cursor;
+      const monthEnd = endOfMonth(monthStart);
+      const rangeStart = start > monthStart ? start : monthStart;
+      const rangeEnd = end < monthEnd ? end : monthEnd;
+      monthBounds.push({
+        key: monthKey(monthStart),
+        monthStart,
+        monthEnd,
+        rangeStart,
+        rangeEnd,
+      });
       cursor = startOfMonth(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1));
     }
+    const months = monthBounds.map((m) => m.key);
 
     const inputs = await prisma.roiMonthlyInputs.findMany({
       where: {
@@ -137,14 +174,10 @@ export async function POST(req: Request) {
 
     // partial-month fraction per month
     const fractionByMonth = new Map<string, number>();
-    months.forEach((m) => {
-      const mStart = startOfMonth(new Date(`${m}-01T00:00:00`));
-      const mEnd = endOfMonth(mStart);
-      const rangeStart = start > mStart ? start : mStart;
-      const rangeEnd = end < mEnd ? end : mEnd;
+    monthBounds.forEach(({ key, monthStart, monthEnd, rangeStart, rangeEnd }) => {
       const days = Math.max(0, (rangeEnd.getTime() - rangeStart.getTime()) / (1000 * 60 * 60 * 24) + 1);
-      const daysInMonth = Math.max(1, (mEnd.getTime() - mStart.getTime()) / (1000 * 60 * 60 * 24) + 1);
-      fractionByMonth.set(m, days / daysInMonth);
+      const daysInMonth = Math.max(1, (monthEnd.getTime() - monthStart.getTime()) / (1000 * 60 * 60 * 24) + 1);
+      fractionByMonth.set(key, days / daysInMonth);
     });
 
     // comp results (commission paid source of truth)
@@ -273,14 +306,131 @@ export async function POST(req: Request) {
     kpis.net = kpis.revenue - totalCosts;
     kpis.roi = totalCosts > 0 ? ((kpis.revenue - totalCosts) / totalCosts) * 100 : 0;
 
-    return NextResponse.json({
+    // Diagnostics only. Do NOT modify ROI math based on these warnings.
+    const diagnostics = {
+      missingCommissionRates: [] as Array<{ lob: string; months: string[] }>,
+      missingSalaryPlans: [] as Array<{ personId: string; personName: string }>,
+      missingMonthlyInputs: [] as Array<{ personId: string; personName: string; month: string }>,
+      reconciliation: {
+        agencyVsPeople: [] as Array<{ field: "revenue" | "salary" | "commission" | "net"; agencyTotal: number; peopleTotal: number; delta: number }>,
+        personBreakdown: [] as Array<{ personId: string; field: "revenue" | "net"; expected: number; actual: number; delta: number }>,
+      },
+    };
+
+    // Missing commission rates by lob/month within the selected range
+    Array.from(lobRowsMap.keys()).forEach((lob) => {
+      const lobRates = ratesByLob.get(lob) || [];
+      const missingMonths: string[] = [];
+      monthBounds.forEach(({ key, rangeStart, rangeEnd }) => {
+        const hasCoveringRate = lobRates.some(
+          (r) =>
+            r.effectiveStart <= rangeStart &&
+            (r.effectiveEnd === null || r.effectiveEnd === undefined || r.effectiveEnd >= rangeEnd)
+        );
+        if (!hasCoveringRate) missingMonths.push(key);
+      });
+      if (missingMonths.length) diagnostics.missingCommissionRates.push({ lob, months: missingMonths });
+    });
+
+    // Missing comp plans per person for the selected window
+    const compPlansByPerson = new Map<string, typeof compPlans>();
+    compPlans.forEach((plan) => {
+      const list = compPlansByPerson.get(plan.personId) || [];
+      list.push(plan);
+      compPlansByPerson.set(plan.personId, list);
+    });
+
+    Array.from(peopleMap.values()).forEach((person) => {
+      const plans = compPlansByPerson.get(person.personId) || [];
+      const hasCoveringPlan = plans.some(
+        (plan) =>
+          plan.effectiveStart <= end &&
+          (plan.effectiveEnd === null || plan.effectiveEnd === undefined || plan.effectiveEnd >= start)
+      );
+      if (!hasCoveringPlan) {
+        diagnostics.missingSalaryPlans.push({ personId: person.personId, personName: person.personName });
+      }
+    });
+
+    // Missing monthly inputs per person/month (lightweight)
+    Array.from(peopleMap.values()).forEach((person) => {
+      monthBounds.forEach(({ key }) => {
+        const inputKey = `${person.personId}-${key}`;
+        if (!inputsByPersonMonth.has(inputKey)) {
+          diagnostics.missingMonthlyInputs.push({ personId: person.personId, personName: person.personName, month: key });
+        }
+      });
+    });
+
+    const reconciliationAgency: Array<{ field: "revenue" | "salary" | "commission" | "net"; agencyTotal: number; peopleTotal: number; delta: number }> =
+      [];
+    const agg = {
+      revenue: kpis.revenue ?? 0,
+      salary: kpis.salaries ?? 0,
+      commission: kpis.commissionsPaid ?? 0,
+      net: kpis.net ?? 0,
+    };
+    const peopleAgg = peopleRows.reduce(
+      (acc, p) => {
+        acc.revenue += p.revenue ?? 0;
+        acc.salary += p.salary ?? 0;
+        acc.commission += p.commissionsPaid ?? 0;
+        acc.net += p.net ?? 0;
+        return acc;
+      },
+      { revenue: 0, salary: 0, commission: 0, net: 0 }
+    );
+    (["revenue", "salary", "commission", "net"] as const).forEach((field) => {
+      const agencyTotal = agg[field];
+      const peopleTotal = peopleAgg[field];
+      const delta = agencyTotal - peopleTotal;
+      if (Math.abs(delta) > 0.01) {
+        reconciliationAgency.push({ field, agencyTotal, peopleTotal, delta });
+      }
+    });
+    diagnostics.reconciliation.agencyVsPeople = reconciliationAgency;
+
+    const reconciliationPeople: Array<{ personId: string; field: "revenue" | "net"; expected: number; actual: number; delta: number }> = [];
+    peopleRows.forEach((p) => {
+      const recomputedRevenue = p.revenue ?? 0;
+      const recomputedNet = p.revenue - (p.salary + p.commissionsPaid + p.leadSpend + (p.otherBonusesManual ?? 0) + (p.marketingExpenses ?? 0));
+      const revenueDelta = (p.revenue ?? 0) - recomputedRevenue;
+      const netDelta = (p.net ?? 0) - recomputedNet;
+      if (Math.abs(revenueDelta) > 0.01) {
+        reconciliationPeople.push({ personId: p.personId, field: "revenue", expected: recomputedRevenue, actual: p.revenue ?? 0, delta: revenueDelta });
+      }
+      if (Math.abs(netDelta) > 0.01) {
+        reconciliationPeople.push({ personId: p.personId, field: "net", expected: recomputedNet, actual: p.net ?? 0, delta: netDelta });
+      }
+    });
+    diagnostics.reconciliation.personBreakdown = reconciliationPeople;
+
+    const hasDiagnostics =
+      diagnostics.missingCommissionRates.length > 0 ||
+      diagnostics.missingSalaryPlans.length > 0 ||
+      diagnostics.missingMonthlyInputs.length > 0 ||
+      (diagnostics.reconciliation?.agencyVsPeople?.length || 0) > 0 ||
+      (diagnostics.reconciliation?.personBreakdown?.length || 0) > 0;
+
+    const payload: any = {
       kpis,
       lobRows: Array.from(lobRowsMap.values()),
       peopleRows,
-    });
+    };
+
+    if (hasDiagnostics) {
+      payload.diagnostics = diagnostics;
+    }
+
+    return NextResponse.json(payload, { status: 200 });
   } catch (err: any) {
-    const message = err?.message || "Internal error";
-    const stack = process.env.NODE_ENV !== "production" ? err?.stack : undefined;
-    return NextResponse.json({ error: message, stack }, { status: 500 });
+    console.error("[ROI report] error", err);
+    return NextResponse.json(
+      {
+        error: "ROI report failed",
+        detail: String(err?.message ?? err),
+      },
+      { status: 500 }
+    );
   }
 }

@@ -5,6 +5,20 @@ import { DateRangePicker } from "@/components/DateRangePicker";
 
 type LobOption = { id: string; name: string; premiumCategory: string };
 
+type MissingCommissionRateDiag = { lob: string; months: string[] };
+type MissingSalaryPlanDiag = { personId: string; personName?: string };
+type MissingMonthlyInputDiag = { personId: string; personName?: string; month: string };
+
+type RoiDiagnostics = {
+  missingCommissionRates?: MissingCommissionRateDiag[];
+  missingSalaryPlans?: MissingSalaryPlanDiag[];
+  missingMonthlyInputs?: MissingMonthlyInputDiag[];
+  reconciliation?: {
+    agencyVsPeople?: Array<{ field: "revenue" | "salary" | "commission" | "net"; agencyTotal: number; peopleTotal: number; delta: number }>;
+    personBreakdown?: Array<{ personId: string; field: "revenue" | "net"; expected: number; actual: number; delta: number }>;
+  };
+};
+
 type RoiApiResponse = {
   kpis: {
     revenue: number;
@@ -30,9 +44,11 @@ type RoiApiResponse = {
     net: number;
     roi: number;
   }>;
+  diagnostics?: RoiDiagnostics;
 };
 
 const STATUS_OPTIONS = ["WRITTEN", "ISSUED", "PAID", "STATUS_CHECK", "CANCELLED"] as const;
+const ROI_API_PATH = "/api/reports/roi"; // keep relative so browser sends cookies
 
 function formatMoney(n: number) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -50,6 +66,21 @@ function percentInputToDecimal(input: string): number {
   const n = Number(cleaned);
   if (isNaN(n)) return 0;
   return n / 100;
+}
+
+// IMPORTANT: All ROI requests must include credentials for viewer auth
+async function fetchRoi(payload: any) {
+  // IMPORTANT: credentials must be included or cookies will not be sent (viewer will be null)
+  console.log("[ROIClient] document.cookie present?", Boolean(document.cookie && document.cookie.length));
+  console.log("[ROIClient] ROI_API_PATH", ROI_API_PATH);
+  return fetch(ROI_API_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    mode: "same-origin",
+    cache: "no-store",
+  });
 }
 
 export default function ROIClient({ lobs }: { lobs: LobOption[] }) {
@@ -125,11 +156,7 @@ export default function ROIClient({ lobs }: { lobs: LobOption[] }) {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch("/api/reports/roi", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ start, end, statuses }),
-        });
+        const res = await fetchRoi({ start, end, statuses });
         if (!res.ok) {
           const text = await res.text();
           throw new Error(`${res.status}: ${text}`);
@@ -284,6 +311,8 @@ export default function ROIClient({ lobs }: { lobs: LobOption[] }) {
         <div style={{ padding: 12, background: "#f1f5f9", borderRadius: 10 }}>No data for the selected range.</div>
       )}
 
+      {data?.diagnostics && <DiagnosticsBanner diagnostics={data.diagnostics} />}
+
       {computed && (
         <>
           <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
@@ -355,11 +384,11 @@ export default function ROIClient({ lobs }: { lobs: LobOption[] }) {
             </div>
           </section>
 
-          <section style={{ display: "grid", gap: 8 }}>
-            <h3 style={{ margin: 0 }}>Per-person ROI</h3>
-            <div style={{ overflowX: "auto" }}>
-              <table style={tableStyle}>
-                <thead>
+      <section style={{ display: "grid", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Per-person ROI</h3>
+        <div style={{ overflowX: "auto" }}>
+          <table style={tableStyle}>
+            <thead>
                   <tr>
                     <th style={thStyle}>Person</th>
                     <th style={thStyle}>Apps</th>
@@ -367,21 +396,73 @@ export default function ROIClient({ lobs }: { lobs: LobOption[] }) {
                     <th style={thStyle}>Revenue</th>
                     <th style={thStyle}>Salary</th>
                     <th style={thStyle}>Commission Paid</th>
-                    <th style={thStyle}>Other bonuses (auto)</th>
-                    <th style={thStyle}>Other bonuses (manual)</th>
-                    <th style={thStyle}>Marketing expenses</th>
+                    <th style={thStyle} title="System-calculated bonuses">Other bonuses (auto)</th>
+                    <th style={thStyle} title="Manually entered bonuses">Other bonuses (manual)</th>
+                    <th style={thStyle} title="Allocated marketing costs">Marketing expenses</th>
                     <th style={thStyle}>Net</th>
                     <th style={thStyle}>ROI</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {computed.rows.length === 0 && (
-                    <tr>
-                      <td colSpan={11} style={{ ...tdStyle, textAlign: "center", color: "#475569" }}>
-                        No people found in this range.
-                      </td>
-                    </tr>
-                  )}
+              </tr>
+            </thead>
+            <tbody>
+              {computed.rows.length === 0 && (
+                <tr>
+                  <td colSpan={11} style={{ ...tdStyle, textAlign: "left" }}>
+                    {(() => {
+                      const hasTotalsActivity =
+                        Math.abs(computed.kpis.revenue || 0) > 0.01 ||
+                        Math.abs(computed.kpis.salaries || 0) > 0.01 ||
+                        Math.abs(computed.kpis.commissionsPaid || 0) > 0.01 ||
+                        Math.abs(computed.kpis.net || 0) > 0.01;
+                      const hasLobActivity = computed.lobTable.some((l) => (l.apps || 0) > 0 || Math.abs(l.premium || 0) > 0.01);
+                      const trulyEmpty = !hasTotalsActivity && !hasLobActivity;
+
+                      if (trulyEmpty) {
+                        return (
+                          <div
+                            style={{
+                              border: "1px solid #e5e7eb",
+                              borderRadius: 12,
+                              padding: 12,
+                              background: "#f8fafc",
+                              color: "#475569",
+                              display: "grid",
+                              gap: 8,
+                            }}
+                          >
+                            <div style={{ fontWeight: 800 }}>No ROI data for this range</div>
+                            <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
+                              <li>Try expanding the written range or including additional statuses.</li>
+                              <li>Confirm ROI Setup is configured (commission rates, salary plans, monthly inputs).</li>
+                              <li>If you recently changed setup, refresh the page.</li>
+                            </ul>
+                            <a
+                              href="/admin-tools/roi-setup"
+                              style={{
+                                width: "fit-content",
+                                padding: "8px 12px",
+                                borderRadius: 10,
+                                border: "1px solid #2563eb",
+                                background: "#eff6ff",
+                                color: "#1d4ed8",
+                                fontWeight: 800,
+                                textDecoration: "none",
+                              }}
+                            >
+                              Go to ROI Setup
+                            </a>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div style={{ color: "#475569" }}>
+                          Agency totals exist, but no people matched the current filters.
+                        </div>
+                      );
+                    })()}
+                  </td>
+                </tr>
+              )}
 
                   {computed.rows.map((r) => (
                     <tr key={r.personId}>
@@ -509,9 +590,17 @@ export default function ROIClient({ lobs }: { lobs: LobOption[] }) {
 
                       <td style={{ ...tdStyle, fontWeight: 800, color: r.net >= 0 ? "#166534" : "#b91c1c" }}>
                         {formatMoney(r.net)}
+                        {r.net === 0 && data?.diagnostics && hasMissingDiagnostics(data.diagnostics) ? (
+                          <div style={{ fontSize: 11, color: "#475569", marginTop: 4 }}>ROI may be zero until setup is complete.</div>
+                        ) : null}
                       </td>
 
-                      <td style={tdStyle}>{r.roi.toFixed(1)}%</td>
+                      <td style={tdStyle}>
+                        {r.roi.toFixed(1)}%
+                        {r.roi === 0 && data?.diagnostics && hasMissingDiagnostics(data.diagnostics) ? (
+                          <div style={{ fontSize: 11, color: "#475569", marginTop: 4 }}>ROI may be zero until setup is complete.</div>
+                        ) : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -524,8 +613,132 @@ export default function ROIClient({ lobs }: { lobs: LobOption[] }) {
   );
 }
 
+function DiagnosticsBanner({ diagnostics }: { diagnostics?: RoiDiagnostics }) {
+  if (!diagnostics) return null;
+
+  const missingRates = diagnostics.missingCommissionRates || [];
+  const missingPlans = diagnostics.missingSalaryPlans || [];
+  const missingInputs = diagnostics.missingMonthlyInputs || [];
+  const reconciliation = diagnostics.reconciliation;
+  const hasMissing = missingRates.length > 0 || missingPlans.length > 0 || missingInputs.length > 0;
+  const hasReconciliation =
+    (reconciliation?.agencyVsPeople?.length || 0) > 0 || (reconciliation?.personBreakdown?.length || 0) > 0;
+  if (!hasMissing && !hasReconciliation) return null;
+
+  const sectionLabelStyle: React.CSSProperties = { fontWeight: 700, color: "#92400e" };
+
+  return (
+    <div
+      style={{
+        border: "1px solid #f59e0b",
+        background: "#fffbeb",
+        borderRadius: 12,
+        padding: 12,
+        display: "grid",
+        gap: 8,
+        marginBottom: 8,
+      }}
+    >
+      <div style={{ fontWeight: 800, color: "#92400e" }}>ROI setup is incomplete</div>
+      <div style={{ color: "#b45309", fontSize: 13 }}>Some ROI calculations may be incomplete until missing setup data is added.</div>
+
+      <ul style={{ margin: 0, paddingLeft: 18, color: "#92400e", display: "grid", gap: 6 }}>
+        {missingRates.length > 0 && (
+          <li>
+            <span style={sectionLabelStyle}>Missing commission rates for: </span>
+            {missingRates
+              .map((r) => {
+                const months = r.months || [];
+                const head = months.slice(0, 3).join(", ");
+                const extra = months.length > 3 ? ` (+${months.length - 3} more)` : "";
+                return `${r.lob}${head ? ` (${head}${extra})` : ""}`;
+              })
+              .join("; ")}
+          </li>
+        )}
+
+        {missingPlans.length > 0 && (
+          <li>
+            <span style={sectionLabelStyle}>Missing salary plans for: </span>
+            {(() => {
+              const names = missingPlans.map((p) => p.personName || p.personId);
+              const head = names.slice(0, 5).join(", ");
+              const extra = names.length > 5 ? ` (+${names.length - 5} more)` : "";
+              return `${head}${extra}`;
+            })()}
+          </li>
+        )}
+
+        {missingInputs.length > 0 && (
+          <li>
+            <span style={sectionLabelStyle}>Missing monthly inputs for: </span>
+            {missingInputs.length} entr{missingInputs.length === 1 ? "y" : "ies"}
+          </li>
+        )}
+        {hasReconciliation && (
+          <li>
+            <span style={sectionLabelStyle}>ROI totals do not fully reconcile: </span>
+            <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
+              {[...(reconciliation?.agencyVsPeople || []), ...(reconciliation?.personBreakdown || [])]
+                .slice(0, 5)
+                .map((r, idx) => (
+                  <div key={`rec-${idx}`} style={{ fontSize: 13 }}>
+                    {"agencyTotal" in r
+                      ? `Agency vs people (${r.field}): agency=${r.agencyTotal.toFixed(2)} people=${r.peopleTotal.toFixed(2)} delta=${r.delta.toFixed(2)}`
+                      : `${r.personId} (${r.field}): expected=${r.expected.toFixed(2)} actual=${r.actual.toFixed(2)} delta=${r.delta.toFixed(2)}`}
+                  </div>
+                ))}
+              {((reconciliation?.agencyVsPeople?.length || 0) + (reconciliation?.personBreakdown?.length || 0) > 5) && (
+                <div style={{ fontSize: 13, color: "#92400e" }}>
+                  +{(reconciliation?.agencyVsPeople?.length || 0) + (reconciliation?.personBreakdown?.length || 0) - 5} more mismatches
+                </div>
+              )}
+            </div>
+          </li>
+        )}
+      </ul>
+
+      <a
+        href="/admin-tools/roi-setup"
+        style={{
+          padding: "8px 12px",
+          borderRadius: 10,
+          border: "1px solid #f59e0b",
+          background: "#fef3c7",
+          color: "#92400e",
+          fontWeight: 800,
+          textDecoration: "none",
+          width: "fit-content",
+        }}
+      >
+        Go to ROI Setup
+      </a>
+    </div>
+  );
+}
+
+function hasMissingDiagnostics(diag: RoiDiagnostics): boolean {
+  return (
+    (diag.missingCommissionRates && diag.missingCommissionRates.length > 0) ||
+    (diag.missingSalaryPlans && diag.missingSalaryPlans.length > 0) ||
+    (diag.missingMonthlyInputs && diag.missingMonthlyInputs.length > 0)
+  );
+}
+
 function StatCard({ label, value, color, suffix = "" }: { label: string; value: number; color: string; suffix?: string }) {
   const display = suffix === "%" ? `${value.toFixed(1)}%` : formatMoney(value);
+  const tooltip =
+    label === "Revenue"
+      ? "Premium × commission rate (by LoB)"
+      : label === "Salaries"
+        ? "Salary plan costs in range"
+        : label === "Commissions"
+          ? "Commission payouts in range"
+          : label === "Net"
+            ? "Revenue − salaries − commissions − expenses"
+            : label === "ROI"
+              ? "Net ÷ total cost"
+              : undefined;
   return (
     <div
       style={{
@@ -535,6 +748,7 @@ function StatCard({ label, value, color, suffix = "" }: { label: string; value: 
         background: "#fff",
         boxShadow: "0 4px 20px rgba(0,0,0,0.04)",
       }}
+      title={tooltip}
     >
       <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 900, color }}>{display}</div>

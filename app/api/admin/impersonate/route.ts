@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
 const COOKIE_NAME = "impersonatePersonId";
+const COOKIE_OPTIONS = { path: "/", httpOnly: true, sameSite: "lax" as const };
 
 export async function GET(request: Request) {
   const cookie = request.headers.get("cookie") || "";
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
   const response = NextResponse.json({ ok: true });
 
   if (!personId) {
-    response.cookies.set(COOKIE_NAME, "", { path: "/", maxAge: 0, httpOnly: true, sameSite: "lax" });
+    response.cookies.set(COOKIE_NAME, "", { ...COOKIE_OPTIONS, maxAge: 0 });
     return response;
   }
 
@@ -35,11 +36,11 @@ export async function POST(request: Request) {
   });
   if (!person) {
     const notFound = NextResponse.json({ ok: false, error: "Person not found" }, { status: 404 });
-    notFound.cookies.set(COOKIE_NAME, "", { path: "/", maxAge: 0, httpOnly: true, sameSite: "lax" });
+    notFound.cookies.set(COOKIE_NAME, "", { ...COOKIE_OPTIONS, maxAge: 0 });
     return notFound;
   }
 
-  response.cookies.set(COOKIE_NAME, personId, { path: "/", httpOnly: true, sameSite: "lax" });
+  response.cookies.set(COOKIE_NAME, personId, COOKIE_OPTIONS);
   const ownsAgencies =
     (await prisma.agency.count({ where: { ownerName: { contains: person.fullName, mode: "insensitive" } } })) > 0;
   return NextResponse.json({ person: { ...person, isOwner: ownsAgencies } }, { headers: response.headers });
@@ -47,6 +48,6 @@ export async function POST(request: Request) {
 
 export async function DELETE() {
   const response = NextResponse.json({ ok: true });
-  response.cookies.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
+  response.cookies.set(COOKIE_NAME, "", { ...COOKIE_OPTIONS, maxAge: 0 });
   return response;
 }

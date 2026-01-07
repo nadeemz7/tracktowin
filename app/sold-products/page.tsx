@@ -23,13 +23,23 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
   const selectedAgencyIds = toArray(sp.agencies ?? sp.agencyId);
   const startDefault = formatISO(subDays(new Date(), 30), { representation: "date" });
   const endDefault = formatISO(new Date(), { representation: "date" });
-  const startDateStr = sp.start || startDefault;
-  const endDateStr = sp.end || endDefault;
+  const startDateStr =
+    (typeof sp.start === "string" ? sp.start : undefined) ||
+    (typeof sp.dateFrom === "string" ? sp.dateFrom : undefined) ||
+    startDefault;
+  const endDateStr =
+    (typeof sp.end === "string" ? sp.end : undefined) ||
+    (typeof sp.dateTo === "string" ? sp.dateTo : undefined) ||
+    endDefault;
   const businessOnly = sp.businessOnly === "1";
   const statusFilter = toArray(sp.statuses ?? sp.status) as PolicyStatus[];
-  const personFilter = sp.personId || "";
+  const personFilter =
+    (typeof sp.personId === "string" ? sp.personId : "") ||
+    (typeof sp.soldByPersonId === "string" ? sp.soldByPersonId : "");
   const selectedLobNames = toArray(sp.lob);
   const selectedLobIds = toArray(sp.lobId);
+  const premiumCategoryFilter =
+    typeof sp.premiumCategory === "string" ? sp.premiumCategory.trim().toUpperCase() : "";
 
   const agencies = await prisma.agency.findMany({
     orderBy: { name: "asc" },
@@ -302,12 +312,16 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
     revalidatePath("/sold-products");
   }
 
+  const lobWhere: any = {};
+  if (selectedLobNames.length) lobWhere.name = { in: selectedLobNames };
+  if (premiumCategoryFilter) lobWhere.premiumCategory = premiumCategoryFilter as PremiumCategory;
+
   const productFilters =
-    selectedLobIds.length || selectedLobNames.length || businessOnly
+    selectedLobIds.length || selectedLobNames.length || businessOnly || premiumCategoryFilter
       ? {
           product: {
             ...(selectedLobIds.length ? { lineOfBusinessId: { in: selectedLobIds } } : {}),
-            ...(selectedLobNames.length ? { lineOfBusiness: { name: { in: selectedLobNames } } } : {}),
+            ...(Object.keys(lobWhere).length ? { lineOfBusiness: lobWhere } : {}),
             ...(businessOnly ? { productType: "BUSINESS" as const } : {}),
           },
         }

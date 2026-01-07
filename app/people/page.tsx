@@ -1,9 +1,20 @@
 import { AppShell } from "@/app/components/AppShell";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import PeopleRolesClient, { RolesTab, OfficePlanTab } from "./PeopleRolesClient";
 
-export default async function PeoplePage() {
-  const [people, teams, agencies] = await Promise.all([
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+const TAB_KEYS = ["people", "roles", "office"] as const;
+
+export default async function PeoplePage({ searchParams }: { searchParams?: SearchParams }) {
+  const sp = (await searchParams) || {};
+  const tabParam = Array.isArray(sp.tab) ? sp.tab[0] : sp.tab;
+  const activeTab = TAB_KEYS.includes((tabParam as any) ?? "") ? (tabParam as (typeof TAB_KEYS)[number]) : "people";
+  const personIdParam = Array.isArray(sp.personId) ? sp.personId[0] : sp.personId;
+  const initialSelectedPersonId = typeof personIdParam === "string" ? personIdParam : null;
+
+  const [people, teams, agencies, roleExpectations, personOverrides] = await Promise.all([
     prisma.person.findMany({
       orderBy: { fullName: "asc" },
       include: { team: { include: { agency: true } }, role: true, primaryAgency: true },
@@ -13,6 +24,8 @@ export default async function PeoplePage() {
       orderBy: { name: "asc" },
     }),
     prisma.agency.findMany({ orderBy: { name: "asc" } }),
+    prisma.benchRoleExpectation.findMany({ include: { role: { include: { team: true } } } }),
+    prisma.benchPersonOverride.findMany({ include: { person: true } }),
   ]);
 
   async function createPerson(formData: FormData) {
@@ -76,127 +89,131 @@ export default async function PeoplePage() {
     revalidatePath("/people");
   }
 
+  const tabs: Array<{ key: (typeof TAB_KEYS)[number]; label: string; href: string }> = [
+    { key: "people", label: "People", href: "/people?tab=people" },
+    { key: "roles", label: "Roles", href: "/people?tab=roles" },
+    { key: "office", label: "Office Plan", href: "/people?tab=office" },
+  ];
+
+  const roles = teams.flatMap((t) => t.roles.map((r) => ({ id: r.id, name: r.name, team: t })));
+
   return (
-    <AppShell title="People" subtitle="Create team members, assign team/role, and toggle admin/manager.">
-      <div className="surface" style={{ maxWidth: 700 }}>
-        <h2 style={{ marginTop: 0 }}>New Person</h2>
-        <form action={createPerson} style={{ display: "grid", gap: 10 }}>
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-            <label>
-              Full Name
-              <br />
-              <input name="fullName" required style={{ padding: 8, width: "100%" }} />
-            </label>
-            <label>
-              Email
-              <br />
-              <input name="email" type="email" style={{ padding: 8, width: "100%" }} />
-            </label>
-          </div>
-
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-            <label>
-              Team
-              <br />
-              <select name="teamId" required style={{ padding: 8, width: "100%" }}>
-                <option value="">Select team</option>
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.agency?.name ? `${t.agency.name} — ${t.name}` : t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Role
-              <br />
-              <select name="roleId" style={{ padding: 8, width: "100%" }}>
-                <option value="">No role</option>
-                {teams.flatMap((t) =>
-                  t.roles.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {t.agency?.name ? `${t.agency.name} — ${t.name} / ${r.name}` : `${t.name} / ${r.name}`}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
-            <label>
-              Primary office
-              <br />
-              <select name="primaryAgencyId" style={{ padding: 8, width: "100%" }}>
-                <option value="">Match team office</option>
-                {agencies.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-              <input type="checkbox" name="isAdmin" />
-              Admin
-            </label>
-            <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-              <input type="checkbox" name="isManager" />
-              Manager
-            </label>
-          </div>
-
-          <button type="submit" style={{ padding: "10px 14px", width: 160 }}>
-            Add Person
-          </button>
-        </form>
+    <AppShell title="People & Roles" subtitle="Manage people, role defaults, and office goals for Benchmarks.">
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, borderBottom: "1px solid #e5e7eb" }}>
+        {tabs.map((t) => {
+          const active = activeTab === t.key;
+          return (
+            <a
+              key={t.key}
+              href={t.href}
+              style={{
+                padding: "10px 14px",
+                borderBottom: active ? "3px solid #111827" : "3px solid transparent",
+                fontWeight: active ? 700 : 600,
+                color: active ? "#111827" : "#6b7280",
+                textDecoration: "none",
+              }}
+            >
+              {t.label}
+            </a>
+          );
+        })}
       </div>
 
-      <div className="surface" style={{ marginTop: 18 }}>
-        <h2 style={{ marginTop: 0 }}>People</h2>
-        {people.length === 0 ? (
-          <p style={{ color: "#555" }}>No people yet.</p>
-        ) : (
-          <ul style={{ marginTop: 8, paddingLeft: 18, display: "grid", gap: 8 }}>
-            {people.map((p) => (
-              <li key={p.id} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <div>
-                  <div style={{ fontWeight: 700 }}>{p.fullName}</div>
-                  <div style={{ color: "#555", fontSize: 14 }}>
-                    {p.email || "No email"} • {p.team?.agency?.name ? `${p.team.agency.name} — ` : ""}
-                    {p.team?.name || "No team"}
-                    {p.role ? ` / ${p.role.name}` : ""} • {p.isAdmin ? "Admin" : "User"}
-                    {p.isManager ? " • Manager" : ""} • {p.active ? "Active" : "Inactive"}
-                    {p.primaryAgency ? ` • Primary: ${p.primaryAgency.name}` : ""}
-                  </div>
-                </div>
+      {activeTab === "people" ? (
+        <>
+          <div className="surface" style={{ maxWidth: 700, marginBottom: 16 }}>
+            <h2 style={{ marginTop: 0 }}>New Person</h2>
+            <form action={createPerson} style={{ display: "grid", gap: 10 }}>
+              <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                <label>
+                  Full Name
+                  <br />
+                  <input name="fullName" required style={{ padding: 8, width: "100%" }} />
+                </label>
+                <label>
+                  Email
+                  <br />
+                  <input name="email" type="email" style={{ padding: 8, width: "100%" }} />
+                </label>
+              </div>
 
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <form action={updatePrimary} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <input type="hidden" name="personId" value={p.id} />
-                    <select name="primaryAgencyId" defaultValue={p.primaryAgency?.id || ""} style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}>
-                      <option value="">Match team office</option>
-                      {agencies.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name}
+              <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                <label>
+                  Team
+                  <br />
+                  <select name="teamId" required style={{ padding: 8, width: "100%" }}>
+                    <option value="">Select team</option>
+                    {teams.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.agency?.name ? `${t.agency.name} — ${t.name}` : t.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Role
+                  <br />
+                  <select name="roleId" style={{ padding: 8, width: "100%" }}>
+                    <option value="">No role</option>
+                    {teams.flatMap((t) =>
+                      t.roles.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {t.agency?.name ? `${t.agency.name} — ${t.name} / ${r.name}` : `${t.name} / ${r.name}`}
                         </option>
-                      ))}
-                    </select>
-                    <button type="submit" style={{ padding: "8px 12px" }}>Save</button>
-                  </form>
-                  <form action={toggleActive} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <input type="hidden" name="personId" value={p.id} />
-                    <input type="hidden" name="nextActive" value={(!p.active).toString()} />
-                    <button type="submit" style={{ padding: "8px 12px" }}>
-                      {p.active ? "Deactivate" : "Activate"}
-                    </button>
-                  </form>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+                      ))
+                    )}
+                  </select>
+                </label>
+                <label>
+                  Primary office
+                  <br />
+                  <select name="primaryAgencyId" style={{ padding: 8, width: "100%" }}>
+                    <option value="">Match team office</option>
+                    {agencies.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  <input type="checkbox" name="isAdmin" />
+                  Admin
+                </label>
+                <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  <input type="checkbox" name="isManager" />
+                  Manager
+                </label>
+              </div>
+
+              <button type="submit" style={{ padding: "10px 14px", width: 160 }}>
+                Add Person
+              </button>
+            </form>
+          </div>
+
+          <PeopleRolesClient
+            people={people}
+            teams={teams}
+            agencies={agencies}
+            roleExpectations={roleExpectations}
+            personOverrides={personOverrides}
+            initialSelectedPersonId={initialSelectedPersonId}
+          />
+        </>
+      ) : null}
+
+      {activeTab === "roles" ? (
+        <RolesTab roles={roles} roleExpectations={roleExpectations} />
+      ) : null}
+
+      {activeTab === "office" ? (
+        <OfficePlanTab />
+      ) : null}
     </AppShell>
   );
 }

@@ -24,6 +24,8 @@ type NavItem = {
 const REPORTS_CHILDREN: NavItem["children"] = [
   { href: "/reports/policy", label: "Policy" },
   { href: "/reports/annual", label: "Annual" },
+  { href: "/reports/benchmarks", label: "Benchmarks" },
+  { href: "/reports/snapshots?type=benchmarks", label: "Snapshots (Benchmarks)" },
   { href: "/reports/roi", label: "ROI (Admin Only)" },
 ].filter((item, idx, arr) => arr.findIndex((i) => i?.href === item?.href) === idx);
 
@@ -37,7 +39,7 @@ const NAV_LINKS: NavItem[] = [
     icon: "📊",
     children: REPORTS_CHILDREN,
   },
-  { href: "/people", label: "People", icon: "👥" },
+  { href: "/people", label: "People & Roles", icon: "👥" },
   { href: "/paycheck", label: "Paycheck", icon: "💵" },
   {
     href: "/admin",
@@ -102,7 +104,10 @@ export function AppShell({ title, subtitle, actions, children, showAdminLink = t
         <nav className="app-shell__sidebar-nav">
           {nav.map((link) => {
             const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
-            const childActive = link.children?.some((c) => pathname === c.href);
+            const childActive = link.children?.some((c) => {
+              const childPath = c.href.split("?")[0];
+              return pathname === childPath || pathname.startsWith(`${childPath}/`);
+            });
             return (
               <div key={link.href}>
                 <Link
@@ -115,7 +120,8 @@ export function AppShell({ title, subtitle, actions, children, showAdminLink = t
                 {link.children ? (
                   <div className={`app-shell__nav-sub ${childActive ? "is-open" : ""}`}>
                     {link.children.map((child) => {
-                      const childMatch = pathname === child.href;
+                      const childPath = child.href.split("?")[0];
+                      const childMatch = pathname === childPath || pathname.startsWith(`${childPath}/`);
                       return (
                         <Link
                           key={child.href}

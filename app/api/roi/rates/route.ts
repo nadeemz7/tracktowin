@@ -12,43 +12,50 @@ function parseDate(value: any): Date | null {
 }
 
 export async function GET(req: Request) {
-  const ctx = await getViewerContext(req);
-  // 1) Safe empty for missing context/org (prevents crashes, supports empty UI state)
-  if (!ctx || !ctx.orgId) {
-    return NextResponse.json([]);
-  }
+  try {
+    const ctx = await getViewerContext(req);
+    // 1) Safe empty for missing context/org (prevents crashes, supports empty UI state)
+    if (!ctx || !ctx.orgId) {
+      return NextResponse.json([]);
+    }
 
-  const orgId = ctx.orgId;
-  const url = new URL(req.url);
-  const activeOn = url.searchParams.get("activeOn");
-  const activeDate = parseDate(activeOn);
+    const orgId = ctx.orgId;
+    const url = new URL(req.url);
+    const activeOn = url.searchParams.get("activeOn");
+    const activeDate = parseDate(activeOn);
 
-  if (activeOn && !activeDate) {
-    return NextResponse.json([]);
-  }
+    if (activeOn && !activeDate) {
+      return NextResponse.json([]);
+    }
 
-  if (activeDate) {
-    // Return the latest effective rate per lob for the active date
-    const rates = await prisma.roiCommissionRate.findMany({
-      where: {
-        orgId,
-        effectiveStart: { lte: activeDate },
-        OR: [{ effectiveEnd: null }, { effectiveEnd: { gte: activeDate } }],
-      },
-      orderBy: [{ lob: "asc" }, { effectiveStart: "desc" }],
-    });
-    const latestByLob = new Map<string, typeof rates[number]>();
-    rates.forEach((r) => {
-      if (!latestByLob.has(r.lob)) latestByLob.set(r.lob, r);
-    });
-    return NextResponse.json(Array.from(latestByLob.values()));
-  }
-  else {
-    const rates = await prisma.roiCommissionRate.findMany({
-      where: { orgId },
-      orderBy: [{ lob: "asc" }, { effectiveStart: "asc" }],
-    });
-    return NextResponse.json(rates);
+    if (activeDate) {
+      // Return the latest effective rate per lob for the active date
+      const rates = await prisma.roiCommissionRate.findMany({
+        where: {
+          orgId,
+          effectiveStart: { lte: activeDate },
+          OR: [{ effectiveEnd: null }, { effectiveEnd: { gte: activeDate } }],
+        },
+        orderBy: [{ lob: "asc" }, { effectiveStart: "desc" }],
+      });
+      const latestByLob = new Map<string, typeof rates[number]>();
+      rates.forEach((r) => {
+        if (!latestByLob.has(r.lob)) latestByLob.set(r.lob, r);
+      });
+      return NextResponse.json(Array.from(latestByLob.values()), { status: 200 });
+    } else {
+      const rates = await prisma.roiCommissionRate.findMany({
+        where: { orgId },
+        orderBy: [{ lob: "asc" }, { effectiveStart: "asc" }],
+      });
+      return NextResponse.json(rates, { status: 200 });
+    }
+  } catch (err: any) {
+    console.error("[ROI rates] error", err);
+    return NextResponse.json(
+      { error: "ROI rates failed", detail: String(err?.message ?? err) },
+      { status: 500 }
+    );
   }
 }
 

@@ -2,11 +2,10 @@ import { AppShell } from "@/app/components/AppShell";
 import { prisma } from "@/lib/prisma";
 import { computeWinTheDayPoints, resolveWinTheDayPlanForPerson } from "@/lib/winTheDay";
 import { endOfDay, endOfMonth, endOfWeek, startOfDay, startOfMonth, startOfWeek } from "date-fns";
-import { readCookie } from "@/lib/readCookie";
 import { Suspense } from "react";
 import ActivityEntryModal from "./ActivityEntryModal";
 import { WinTheDayBar } from "./WinTheDayBar";
-import { DateRangePicker } from "./DateRangePicker";
+import { DatePicker1RangeClient } from "@/app/components/DatePicker1RangeClient";
 import { CountersPanel } from "./CountersPanel";
 import { revalidatePath } from "next/cache";
 
@@ -218,22 +217,16 @@ export default async function ActivityManager({
   const { from, to } = await getRange(baseDate, preset, sp.start, sp.end);
   const rangeLabel = `${humanShort(from)} → ${humanShort(to)}`;
   const baseDateStr = formatISO(baseDate);
+  const rangeStartStr = formatISO(from);
+  const rangeEndStr = formatISO(to);
 
   const showTeamSelector = sp.viewAll === "1";
-  const cookiePersonId = (await readCookie("impersonatePersonId")) || "";
-  let people = await prisma.person.findMany({
+  const people = await prisma.person.findMany({
     orderBy: { fullName: "asc" },
     include: { team: true },
   });
 
-  if (cookiePersonId && !people.some((p) => p.id === cookiePersonId)) {
-    const cookiePerson = await prisma.person.findUnique({ where: { id: cookiePersonId }, include: { team: true } });
-    if (cookiePerson) {
-      people = [...people, cookiePerson].sort((a, b) => a.fullName.localeCompare(b.fullName));
-    }
-  }
-
-  const selectedPersonId = sp.personId || cookiePersonId || people[0]?.id || "";
+  const selectedPersonId = sp.personId || people[0]?.id || "";
   const selectedPerson = selectedPersonId ? people.find((p) => p.id === selectedPersonId) : undefined;
   const personName = selectedPerson?.fullName || "Unassigned";
   const teamId = selectedPerson?.teamId || null;
@@ -323,7 +316,14 @@ export default async function ActivityManager({
           <span style={{ color: "#555", fontSize: 13 }}>{rangeLabel}</span>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <DateRangePicker preset={preset} baseDate={baseDateStr} start={sp.start} end={sp.end} query={sp} />
+          <DatePicker1RangeClient
+            start={rangeStartStr}
+            end={rangeEndStr}
+            label=""
+            quickPresets={false}
+            setRangeParam
+            setDateParam
+          />
           {showTeamSelector ? (
             <select
               name="personId"

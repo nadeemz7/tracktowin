@@ -1,12 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
+import { useRouter } from "next/navigation";
 import { OfficePayload, OnboardingPayload, makeOffice } from "./config";
 
 type WizardOffice = OfficePayload;
 
+const fieldBaseStyle: CSSProperties = {
+  border: "1px solid #d1d5db",
+  borderRadius: 8,
+  background: "#ffffff",
+  boxSizing: "border-box",
+};
+
+const inputStyle: CSSProperties = {
+  ...fieldBaseStyle,
+  padding: 8,
+  width: "100%",
+};
+
+const selectStyle: CSSProperties = {
+  ...fieldBaseStyle,
+  padding: 8,
+  width: "100%",
+};
+
 export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: FormData) => void }) {
+  const router = useRouter();
   const [ownerName, setOwnerName] = useState("");
   const [profileName, setProfileName] = useState("");
   const [address, setAddress] = useState("");
@@ -16,6 +37,7 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
   const [step, setStep] = useState(0);
   const [isOpen, setIsOpen] = useState(true);
   const [showBanner, setShowBanner] = useState(false);
+  const [showOwnerNameError, setShowOwnerNameError] = useState(false);
   const steps = ["Profile", "Offices & LOBs", "Teams & Roles", "Roster", "Household Fields & Buckets"];
   const [offices, setOffices] = useState<WizardOffice[]>([
     makeOffice("Legacy"),
@@ -24,6 +46,20 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
   ]);
 
   const officeTabs = useMemo(() => offices.slice(0, officeCount), [offices, officeCount]);
+  const officeOptions = officeTabs.map((o, idx) => o.name || `Office ${idx + 1}`);
+  const hasMultipleOffices = officeTabs.length > 1;
+  const rosterPrimaryOfficeMissing =
+    hasMultipleOffices &&
+    officeTabs.some((office) =>
+      office.people.some((person) => !person.primaryOfficeName || !person.primaryOfficeName.trim())
+    );
+  const ownerNameMissing = !ownerName.trim();
+  const rosterStepIndex = steps.indexOf("Roster");
+  const isRosterStep = step === rosterStepIndex;
+  const isProfileStep = step === 0;
+  const isLastStep = step === steps.length - 1;
+  const isAdvanceBlocked =
+    (isProfileStep && ownerNameMissing) || (isRosterStep && rosterPrimaryOfficeMissing);
 
   const suffixes = ["Legacy", "MOA", "TROA"];
 
@@ -106,14 +142,33 @@ function addProduct(
   }
 
   function addField(idx: number, fieldName: string) {
-    if (!fieldName.trim()) return;
-    updateOffice(idx, (o) => ({
-      ...o,
-      householdFields: [...o.householdFields, { fieldName: fieldName.trim(), required: false, active: true }],
-    }));
+    const trimmed = fieldName.trim();
+    if (!trimmed) return;
+    const normalized = trimmed.toLowerCase();
+    setOffices((prev) =>
+      prev.map((office, officeIdx) => {
+        const shouldApply = sameForAll ? officeIdx < officeCount : officeIdx === idx;
+        if (!shouldApply) return office;
+        const exists = office.householdFields.some(
+          (f) => f.fieldName.trim().toLowerCase() === normalized
+        );
+        if (exists) return office;
+        return {
+          ...office,
+          householdFields: [...office.householdFields, { fieldName: trimmed, required: false, active: true }],
+        };
+      })
+    );
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
+    if (ownerNameMissing) {
+      setShowOwnerNameError(true);
+      setStep(0);
+      return;
+    }
+    const hasSingleOffice = officeTabs.length === 1;
+    const singleOfficeName = officeOptions[0] || "Office 1";
     const payload: OnboardingPayload = {
       ownerName,
       profileName,
@@ -121,6 +176,10 @@ function addProduct(
       sameForAll,
       offices: officeTabs.map((o) => ({
         ...o,
+        people: o.people.map((p) => ({
+          ...p,
+          primaryOfficeName: hasSingleOffice ? singleOfficeName : p.primaryOfficeName,
+        })),
         lobs: o.lobs.map((l) => ({
           ...l,
           products: l.products
@@ -132,9 +191,12 @@ function addProduct(
     };
     const formData = new FormData();
     formData.append("payload", JSON.stringify(payload));
-    onSubmit(formData);
+    await onSubmit(formData);
     setIsOpen(false);
     setShowBanner(true);
+    setTimeout(() => {
+      router.push("/agencies");
+    }, 1200);
   }
 
   return (
@@ -200,7 +262,14 @@ function addProduct(
             <button
               key={s}
               type="button"
-              onClick={() => setStep(idx)}
+              onClick={() => {
+                if (idx > 0 && ownerNameMissing) {
+                  setShowOwnerNameError(true);
+                  setStep(0);
+                  return;
+                }
+                setStep(idx);
+              }}
               style={{
                 padding: "6px 10px",
                 borderRadius: 8,
@@ -228,10 +297,18 @@ function addProduct(
                     const val = e.target.value;
                     setOwnerName(val);
                     applyDefaultOfficeNames(val, officeCount);
+                    if (val.trim()) {
+                      setShowOwnerNameError(false);
+                    }
                   }}
                   placeholder="e.g., Nadeem Moustafa"
-                  style={{ padding: 10, width: "100%" }}
+                  required
+                  aria-invalid={showOwnerNameError && ownerNameMissing}
+                  style={{ ...inputStyle, padding: 10 }}
                 />
+                {showOwnerNameError && ownerNameMissing ? (
+                  <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>Owner name is required.</div>
+                ) : null}
               </label>
               <label>
                 Agency profile name
@@ -240,7 +317,7 @@ function addProduct(
                   value={profileName}
                   onChange={(e) => setProfileName(e.target.value)}
                   placeholder="e.g., Nadeem Moustafa Agency"
-                  style={{ padding: 10, width: "100%" }}
+                  style={{ ...inputStyle, padding: 10 }}
                 />
               </label>
               <label>
@@ -250,7 +327,7 @@ function addProduct(
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
                   placeholder="e.g., 123 Main St, Springfield"
-                  style={{ padding: 10, width: "100%" }}
+                  style={{ ...inputStyle, padding: 10 }}
                 />
               </label>
             </div>
@@ -354,8 +431,20 @@ function addProduct(
             updateField={updateField}
             addField={addField}
             step={step - 1} // shift because profile is step 0
-            officeOptions={officeTabs.map((o) => o.name)}
+            officeOptions={officeOptions}
           />
+        ) : null}
+
+        {isRosterStep && rosterPrimaryOfficeMissing ? (
+          <div style={{ marginTop: 12, color: "#b45309", fontSize: 13 }}>
+            Primary Office is required for each team member when multiple offices are set.
+          </div>
+        ) : null}
+
+        {isLastStep ? (
+          <div style={{ marginTop: 12, color: "#475569", fontSize: 13 }}>
+            Office on a Sold Product can differ from a person's Primary Office. Primary Office is only a default.
+          </div>
         ) : null}
 
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "space-between" }}>
@@ -367,17 +456,37 @@ function addProduct(
           >
             Previous
           </button>
-          <button
-            type="button"
-            onClick={() => setStep((s) => Math.min(steps.length - 1, s + 1))}
-            style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #3f5f46", background: "#3f5f46", color: "#f8f9fa" }}
-          >
-            Next
-          </button>
+          {!isLastStep ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (isProfileStep && ownerNameMissing) {
+                  setShowOwnerNameError(true);
+                  return;
+                }
+                if (isRosterStep && rosterPrimaryOfficeMissing) return;
+                setStep((s) => Math.min(steps.length - 1, s + 1));
+              }}
+              disabled={isAdvanceBlocked}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #3f5f46",
+                background: "#3f5f46",
+                color: "#f8f9fa",
+                opacity: isAdvanceBlocked ? 0.5 : 1,
+                cursor: isAdvanceBlocked ? "not-allowed" : "pointer",
+              }}
+            >
+              Next
+            </button>
+          ) : null}
         </div>
-        <button type="button" onClick={handleSubmit} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #e31836", background: "#e31836", color: "#f8f9fa", fontWeight: 700 }}>
-          Save &amp; Create
-        </button>
+        {isLastStep ? (
+          <button type="button" onClick={handleSubmit} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #e31836", background: "#e31836", color: "#f8f9fa", fontWeight: 700 }}>
+            Save &amp; Finish
+          </button>
+        ) : null}
       </div>
       </div>
         </div>
@@ -421,6 +530,27 @@ function OfficeEditor({
   step: number;
   officeOptions: string[];
 }) {
+  const officeSteps = {
+    lobs: 0,
+    teams: 1,
+    roster: 2,
+    household: 3,
+  };
+  const isHouseholdStep = step === officeSteps.household;
+  const [customFieldName, setCustomFieldName] = useState("");
+
+  const handleAddCustomField = () => {
+    const trimmed = customFieldName.trim();
+    if (!trimmed) return;
+    const normalized = trimmed.toLowerCase();
+    const exists = office.householdFields.some(
+      (f) => f.fieldName.trim().toLowerCase() === normalized
+    );
+    if (exists) return;
+    addField(officeIndex, trimmed);
+    setCustomFieldName("");
+  };
+
   return (
     <div style={{ display: "grid", gap: 14, marginTop: 12 }}>
       {step === 0 ? (
@@ -437,7 +567,7 @@ function OfficeEditor({
                     name: e.target.value,
                   }))
                 }
-                style={{ padding: 8, width: "100%" }}
+                style={inputStyle}
               />
             </label>
           </div>
@@ -496,7 +626,7 @@ function OfficeEditor({
                                   ),
                                 }))
                               }
-                              style={{ padding: 6 }}
+                              style={{ ...selectStyle, padding: 6 }}
                             >
                               <option value="PERSONAL">Personal</option>
                               <option value="BUSINESS">Business</option>
@@ -525,7 +655,7 @@ function OfficeEditor({
                       >
                         <input
                           placeholder="Add product"
-                          style={{ padding: 8, width: 220, border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}
+                          style={{ ...inputStyle, width: 220 }}
                           data-lob-input={`${officeIndex}-${lob.name}`}
                           onKeyDown={(e) => {
                             if (e.key === "Enter") {
@@ -591,7 +721,7 @@ function OfficeEditor({
                         teams: o.teams.map((t, i2) => (i2 === idx ? { ...t, name: e.target.value } : t)),
                       }))
                     }
-                    style={{ padding: 8, width: "100%" }}
+                    style={inputStyle}
                   />
                 </label>
                 <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -622,7 +752,7 @@ function OfficeEditor({
                 <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
                   <input
                     placeholder="Add role"
-                    style={{ padding: 8, width: 220 }}
+                    style={{ ...inputStyle, width: 220 }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
@@ -650,42 +780,86 @@ function OfficeEditor({
         </div>
       ) : null}
 
-      {step === 3 ? (
+      {isHouseholdStep ? (
         <>
-          <div style={{ border: "1px solid #e5e5e5", borderRadius: 10, padding: 12 }}>
+          <div
+            style={{
+              border: "1px solid #e2e8f0",
+              borderRadius: 12,
+              padding: 14,
+              background: "#f8fafc",
+              boxShadow: "0 6px 16px rgba(15, 23, 42, 0.06)",
+            }}
+          >
             <div style={{ fontWeight: 700 }}>Household Fields</div>
             <div style={{ color: "#555", fontSize: 13, marginBottom: 8 }}>
-              Choose what to collect per household. Required fields must be filled by users.
+              These fields are collected when creating or editing a Sold Product / Policy. Required fields must be completed before a sale can be saved.
             </div>
-            <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "grid", gap: 10 }}>
               {office.householdFields.map((f) => (
                 <details
                   key={f.fieldName}
                   style={{
-                    border: "1px solid #e9e9e9",
-                    borderRadius: 8,
-                    padding: 10,
-                    background: "#fff",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 10,
+                    padding: 12,
+                    background: "#ffffff",
                   }}
                 >
-                  <summary style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}>
-                    <div style={{ flex: 1, fontWeight: 600 }}>{f.fieldName}</div>
-                    <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={f.active}
-                        onChange={(e) => updateField(officeIndex, f.fieldName, { active: e.target.checked })}
-                      />
-                      Active
-                    </label>
-                    <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={f.required}
-                        onChange={(e) => updateField(officeIndex, f.fieldName, { required: e.target.checked })}
-                      />
-                      Required
-                    </label>
+                  <summary style={{ display: "flex", gap: 12, alignItems: "center", cursor: "pointer" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
+                        <span>{f.fieldName}</span>
+                        {f.required ? (
+                          <span
+                            style={{
+                              fontSize: 11,
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              background: "#e2e8f0",
+                              color: "#475569",
+                              fontWeight: 700,
+                            }}
+                          >
+                            Required
+                          </span>
+                        ) : null}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                        Appears on Sold Product form
+                      </div>
+                    </div>
+                    <div style={{ display: "inline-flex", gap: 12, alignItems: "center", marginLeft: "auto" }}>
+                      <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={f.active}
+                          onChange={(e) =>
+                            updateField(officeIndex, f.fieldName, {
+                              active: e.target.checked,
+                              required: e.target.checked ? f.required : false,
+                            })
+                          }
+                        />
+                        Active
+                      </label>
+                      <label
+                        style={{
+                          display: "inline-flex",
+                          gap: 6,
+                          alignItems: "center",
+                          opacity: f.active ? 1 : 0.5,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={f.required}
+                          disabled={!f.active}
+                          onChange={(e) => updateField(officeIndex, f.fieldName, { required: e.target.checked })}
+                        />
+                        Required
+                      </label>
+                    </div>
                   </summary>
                   <div style={{ marginTop: 8, display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
                     <label style={{ display: "grid", gap: 4 }}>
@@ -695,7 +869,7 @@ function OfficeEditor({
                         value={f.options || ""}
                         onChange={(e) => updateField(officeIndex, f.fieldName, { options: e.target.value })}
                         placeholder="e.g., ILP, Referral, Outbound"
-                        style={{ padding: 8, border: "1px solid #e5e7eb", borderRadius: 8 }}
+                        style={inputStyle}
                       />
                       <span style={{ fontSize: 12, color: "#6b7280" }}>
                         Leave blank for free-text. If provided, field becomes a dropdown.
@@ -708,7 +882,7 @@ function OfficeEditor({
                         value={f.charLimit || ""}
                         onChange={(e) => updateField(officeIndex, f.fieldName, { charLimit: e.target.value === "" ? undefined : Number(e.target.value) })}
                         placeholder="e.g., 50"
-                        style={{ padding: 8, border: "1px solid #e5e7eb", borderRadius: 8 }}
+                        style={inputStyle}
                       />
                       <span style={{ fontSize: 12, color: "#6b7280" }}>Limit length for names/links if needed.</span>
                     </label>
@@ -716,22 +890,48 @@ function OfficeEditor({
                 </details>
               ))}
             </div>
-            <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
-              <input
-                placeholder="Add custom field"
-                style={{ padding: 8, width: 260 }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addField(officeIndex, (e.target as HTMLInputElement).value);
-                    (e.target as HTMLInputElement).value = "";
-                  }
-                }}
-              />
+            <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  placeholder="Add custom field"
+                  value={customFieldName}
+                  onChange={(e) => setCustomFieldName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddCustomField();
+                    }
+                  }}
+                  style={{ ...inputStyle, width: 260 }}
+                />
+                <button
+                  type="button"
+                  onClick={handleAddCustomField}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #d1d5db",
+                    background: "#283618",
+                    color: "#f8f9fa",
+                    cursor: "pointer",
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Press Enter or click Add.</div>
             </div>
           </div>
 
-          <div style={{ border: "1px solid #e5e5e5", borderRadius: 10, padding: 12 }}>
+          <div
+            style={{
+              border: "1px solid #e2e8f0",
+              borderRadius: 12,
+              padding: 14,
+              background: "#f8fafc",
+              boxShadow: "0 6px 16px rgba(15, 23, 42, 0.06)",
+            }}
+          >
             <div style={{ fontWeight: 700 }}>Premium Buckets</div>
             <div style={{ color: "#555", fontSize: 13, marginBottom: 8 }}>
               Buckets group products/LoBs for reporting/commission. Defaults provided.
@@ -787,7 +987,7 @@ function PersonEditor({
           <input
             value={form.fullName}
             onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
-            style={{ padding: 8, width: "100%" }}
+            style={inputStyle}
           />
         </label>
         <label>
@@ -796,7 +996,7 @@ function PersonEditor({
           <input
             value={form.email}
             onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-            style={{ padding: 8, width: "100%" }}
+            style={inputStyle}
           />
         </label>
         <label>
@@ -810,7 +1010,7 @@ function PersonEditor({
                 office.teams.find((t) => t.name === nextTeam)?.roles[0] || "";
               setForm((f) => ({ ...f, team: nextTeam, role: nextRole }));
             }}
-            style={{ padding: 8, width: "100%" }}
+            style={selectStyle}
           >
             {office.teams.map((t) => (
               <option key={t.name} value={t.name}>
@@ -825,7 +1025,7 @@ function PersonEditor({
           <select
             value={form.role}
             onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
-            style={{ padding: 8, width: "100%" }}
+            style={selectStyle}
           >
             {office.teams
               .find((t) => t.name === form.team)
@@ -837,12 +1037,12 @@ function PersonEditor({
           </select>
         </label>
         <label>
-          Primary office
+          Primary Office
           <br />
           <select
             value={form.primaryOfficeName}
             onChange={(e) => setForm((f) => ({ ...f, primaryOfficeName: e.target.value }))}
-            style={{ padding: 8, width: "100%" }}
+            style={selectStyle}
           >
             {officeOptions.map((o) => (
               <option key={o} value={o}>
@@ -850,6 +1050,9 @@ function PersonEditor({
               </option>
             ))}
           </select>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+            Used as the default office for new sales and reporting. You can change the office per policy later.
+          </div>
         </label>
       </div>
 

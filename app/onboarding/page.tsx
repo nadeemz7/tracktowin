@@ -1,12 +1,18 @@
 import { AppShell } from "@/app/components/AppShell";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import Link from "next/link";
 import { OnboardingPayload, PremiumCategory } from "./config";
 import { ensureDefaultWinTheDayPlans } from "@/lib/wtdDefaults";
 import OnboardingWizard from "./OnboardingWizard";
 
 async function createFromPayload(payload: OnboardingPayload) {
   const createdAgencies: { name: string; id: string }[] = [];
+  const ownerName = payload.ownerName?.trim() || "";
+  if (!ownerName) {
+    throw new Error("Owner name is required.");
+  }
+  const ownerNameNormalized = ownerName.toLowerCase();
 
   // First create all agencies (LoBs/products/buckets) so we have ids for cross-office references
   for (const office of payload.offices) {
@@ -14,7 +20,7 @@ async function createFromPayload(payload: OnboardingPayload) {
       data: {
         name: office.name,
         profileName: payload.profileName || null,
-        ownerName: payload.ownerName || null,
+        ownerName,
         address: payload.address || null,
         linesOfBusiness: {
           create: office.lobs
@@ -42,6 +48,9 @@ async function createFromPayload(payload: OnboardingPayload) {
     });
     createdAgencies.push({ name: office.name, id: agency.id });
   }
+
+  const ownerPrimaryAgencyId = createdAgencies[0]?.id ?? null;
+  let ownerCreated = false;
 
   // Now create teams/roles/people/fields with correct agency IDs
   for (const office of payload.offices) {
@@ -75,8 +84,13 @@ async function createFromPayload(payload: OnboardingPayload) {
           ? "CS"
           : "SALES";
 
-      const primaryAgencyId =
+      const defaultPrimaryAgencyId =
         createdAgencies.find((a) => a.name === (person.primaryOfficeName || office.name))?.id || agency.id;
+      const isOwnerMatch = person.fullName.trim().toLowerCase() === ownerNameNormalized;
+      if (isOwnerMatch) {
+        ownerCreated = true;
+      }
+      const primaryAgencyId = isOwnerMatch ? ownerPrimaryAgencyId : defaultPrimaryAgencyId;
 
       await prisma.person.create({
         data: {
@@ -86,8 +100,8 @@ async function createFromPayload(payload: OnboardingPayload) {
           active: true,
           teamId: team?.id || null,
           roleId: role?.id || null,
-          isAdmin: person.isAdmin,
-          isManager: person.isManager,
+          isAdmin: isOwnerMatch ? true : person.isAdmin,
+          isManager: isOwnerMatch ? true : person.isManager,
           primaryAgencyId,
         },
       });
@@ -113,11 +127,27 @@ async function createFromPayload(payload: OnboardingPayload) {
     });
   }
 
+  if (!ownerCreated) {
+    await prisma.person.create({
+      data: {
+        fullName: ownerName,
+        email: null,
+        teamType: "SALES",
+        active: true,
+        teamId: null,
+        roleId: null,
+        isAdmin: true,
+        isManager: true,
+        primaryAgencyId: ownerPrimaryAgencyId,
+      },
+    });
+  }
+
   revalidatePath("/agencies");
   revalidatePath("/people");
 }
 
-export default function OnboardingPage() {
+export default function OnboardingPage({ searchParams }: { searchParams?: { success?: string } }) {
   async function handleSubmit(formData: FormData) {
     "use server";
 
@@ -145,9 +175,71 @@ export default function OnboardingPage() {
     }
   }
 
+  const showSuccess = searchParams?.success === "1" || searchParams?.success === "true";
+
   return (
     <AppShell title="Set up your offices" subtitle="Quick wizard to add agencies, products, teams, and roster.">
-      <OnboardingWizard onSubmit={handleSubmit} />
+      {showSuccess ? (
+        <div
+          style={{
+            padding: 24,
+            borderRadius: 16,
+            border: "1px solid #bbf7d0",
+            background: "#ecfdf5",
+            display: "grid",
+            gap: 12,
+            maxWidth: 720,
+          }}
+        >
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#065f46" }}>Onboarding complete</div>
+          <div style={{ color: "#065f46" }}>
+            Your agency setup is ready. Choose where you want to go next.
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <Link
+              href="/agencies"
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                background: "#16a34a",
+                color: "#ffffff",
+                textDecoration: "none",
+                fontWeight: 700,
+              }}
+            >
+              Go to agencies
+            </Link>
+            <Link
+              href="/people?tab=people"
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #16a34a",
+                color: "#065f46",
+                textDecoration: "none",
+                fontWeight: 700,
+              }}
+            >
+              Go to people
+            </Link>
+            <Link
+              href="/onboarding"
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #16a34a",
+                color: "#065f46",
+                textDecoration: "none",
+                fontWeight: 700,
+              }}
+            >
+              Run onboarding again
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <OnboardingWizard onSubmit={handleSubmit} />
+      )}
     </AppShell>
   );
 }

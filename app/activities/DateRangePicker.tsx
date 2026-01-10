@@ -2,7 +2,7 @@
 
 import { addMonths, eachDayOfInterval, endOfMonth, format, startOfMonth } from "date-fns";
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 type RangePreset = "today" | "week" | "month" | "custom";
 type Query = Record<string, string | undefined>;
@@ -13,7 +13,7 @@ function parseLocal(iso: string) {
   return new Date(y, m - 1, d);
 }
 
-function formatISO(d: Date) {
+function toDateISO(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
@@ -23,16 +23,18 @@ export function DateRangePicker({
   start,
   end,
   query,
-  path = "/activities",
+  basePath,
 }: {
   preset: RangePreset;
   baseDate: string;
   start?: string;
   end?: string;
   query: Query;
-  path?: string;
+  basePath?: string;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const path = basePath ?? pathname;
   const [open, setOpen] = useState(false);
   const [draftStart, setDraftStart] = useState<string | undefined>(start);
   const [draftEnd, setDraftEnd] = useState<string | undefined>(end);
@@ -74,7 +76,7 @@ export function DateRangePicker({
   }
 
   function onDayClick(day: Date) {
-    const dayIso = formatISO(day);
+    const dayIso = toDateISO(day);
     if (!draftStart || (draftStart && draftEnd)) {
       setDraftStart(dayIso);
       setDraftEnd(undefined);
@@ -105,8 +107,8 @@ export function DateRangePicker({
       <div key={format(month, "yyyy-MM")} style={{ minWidth: 220 }}>
         <div style={{ textAlign: "center", fontWeight: 700, marginBottom: 8 }}>{format(month, "MMMM yyyy")}</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, fontSize: 12, color: "#555", marginBottom: 6, textAlign: "center" }}>
-          {["S", "M", "T", "W", "T", "F", "S"].map((d) => (
-            <div key={d}>{d}</div>
+          {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+            <div key={`${d}-${i}`}>{d}</div>
           ))}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
@@ -114,7 +116,7 @@ export function DateRangePicker({
             <div key={`empty-${idx}`} />
           ))}
           {days.map((day) => {
-            const iso = formatISO(day);
+            const iso = toDateISO(day);
             const isStart = draftStart && iso === draftStart;
             const isEnd = draftEnd && iso === draftEnd;
             const isInRange =
@@ -190,7 +192,7 @@ export function DateRangePicker({
               type="button"
               onClick={() => {
                 const prev = startOfMonth(addMonths(monthStart, -1));
-                const href = buildHref({ date: formatISO(prev) });
+                const href = buildHref({ date: toDateISO(prev) });
                 router.push(href);
               }}
               style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 10px" }}
@@ -202,7 +204,7 @@ export function DateRangePicker({
               type="button"
               onClick={() => {
                 const next = startOfMonth(addMonths(monthStart, 1));
-                const href = buildHref({ date: formatISO(next) });
+                const href = buildHref({ date: toDateISO(next) });
                 router.push(href);
               }}
               style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 10px" }}
@@ -215,7 +217,7 @@ export function DateRangePicker({
               type="button"
               onClick={() => {
                 const today = new Date();
-                const iso = formatISO(today);
+                const iso = toDateISO(today);
                 setDraftStart(iso);
                 setDraftEnd(iso);
                 router.push(buildHref({ range: "today", date: iso, start: undefined, end: undefined }));

@@ -26,6 +26,26 @@ type BreakdownRow = {
   pacePremium: number | null;
 };
 
+type LobOption = {
+  id: string;
+  name: string;
+  premiumCategory: string;
+};
+
+type LobActualRow = {
+  lobId: string;
+  name: string;
+  category?: string | null;
+  appsActual: number;
+  premiumActual: number;
+};
+
+type BucketActualRow = {
+  bucket: string;
+  appsActual: number;
+  premiumActual: number;
+};
+
 type PersonRow = {
   personId: string;
   name: string;
@@ -34,6 +54,9 @@ type PersonRow = {
   premiumActual: number;
   appsTarget: number;
   premiumTarget: number;
+  appsTargetsByLob: Record<string, number>;
+  premiumTargetsByBucket: { PC: number; FS: number; IPS: number };
+  activityTargetsByType: Record<string, number>;
   appsDelta: number;
   premiumDelta: number;
   pacePremium: number | null;
@@ -44,6 +67,12 @@ export type BenchmarksReport = {
   office: OfficeSummary;
   breakdown: { mode: "BUCKET" | "LOB"; rows: BreakdownRow[] };
   people: PersonRow[];
+  lobs: LobOption[];
+  lobActuals: LobActualRow[];
+  bucketActuals: BucketActualRow[];
+  officePlanYear?: number;
+  officePlanAppsByLob?: Record<string, number> | null;
+  officePlanPremiumByBucket?: { PC: number; FS: number; IPS: number } | null;
 };
 
 export class BenchmarksReportError extends Error {
@@ -73,6 +102,54 @@ function toNonNegativeNumber(value: any) {
   return num;
 }
 
+function toNonNegativeInt(value: any) {
+  return Math.round(toNonNegativeNumber(value));
+}
+
+function normalizeTargetRecord(input: any, integer = false) {
+  if (!input || typeof input !== "object") return null;
+  const result: Record<string, number> = {};
+  Object.entries(input as Record<string, any>).forEach(([key, value]) => {
+    if (!key) return;
+    result[key] = integer ? toNonNegativeInt(value) : toNonNegativeNumber(value);
+  });
+  return result;
+}
+
+function normalizePremiumByLob(input: any) {
+  if (!Array.isArray(input)) return null;
+  const result: Record<string, number> = {};
+  input.forEach((row: any) => {
+    const lobId = typeof row?.lobId === "string" ? row.lobId : "";
+    if (!lobId) return;
+    result[lobId] = toNonNegativeNumber(row?.premium);
+  });
+  return result;
+}
+
+function bucketTargetsFromLob(
+  lobTargets: Record<string, number> | null,
+  lobCategoryById: Map<string, string>
+) {
+  if (!lobTargets) return null;
+  const totals = { PC: 0, FS: 0, IPS: 0 };
+  Object.entries(lobTargets).forEach(([lobId, value]) => {
+    const category = lobCategoryById.get(lobId) || "PC";
+    if (category === "FS") totals.FS += value;
+    else if (category === "IPS") totals.IPS += value;
+    else totals.PC += value;
+  });
+  return totals;
+}
+
+function ensureBucketTargets(input: { PC: number; FS: number; IPS?: number } | null) {
+  return { PC: input?.PC ?? 0, FS: input?.FS ?? 0, IPS: input?.IPS ?? 0 };
+}
+
+function sumRecord(input: Record<string, number>) {
+  return Object.values(input).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+}
+
 function normalizeBucketTargets(input: any) {
   if (!input || typeof input !== "object") return null;
   const pc = toNonNegativeNumber((input as any).PC);
@@ -82,22 +159,13 @@ function normalizeBucketTargets(input: any) {
   return ips === undefined ? { PC: pc, FS: fs } : { PC: pc, FS: fs, IPS: ips };
 }
 
-function sumAppGoalsByLob(input: any) {
-  if (!input || typeof input !== "object") return null;
-  const auto = toNonNegativeNumber((input as any).AUTO);
-  const fire = toNonNegativeNumber((input as any).FIRE);
-  const life = toNonNegativeNumber((input as any).LIFE);
-  const health = toNonNegativeNumber((input as any).HEALTH);
-  const ipsRaw = (input as any).IPS;
-  const ips = ipsRaw !== undefined ? toNonNegativeNumber(ipsRaw) : 0;
-  return auto + fire + life + health + ips;
-}
-
 type GetBenchmarksReportParams = {
   orgId: string;
   start: Date;
   end: Date;
   statuses: PolicyStatus[];
+  personIds?: string[];
+  lobIds?: string[];
 };
 
 export async function getBenchmarksReport({
@@ -105,6 +173,8 @@ export async function getBenchmarksReport({
   start,
   end,
   statuses,
+  personIds,
+  lobIds,
 }: GetBenchmarksReportParams): Promise<BenchmarksReport> {
   const rangeStart = toStartOfDay(start);
   const rangeEnd = toEndOfDay(end);
@@ -113,27 +183,49 @@ export async function getBenchmarksReport({
     throw new BenchmarksReportError("Invalid date range", 400);
   }
 
+  const personFilterIds = Array.isArray(personIds)
+    ? personIds.map((id) => String(id)).filter((id) => id)
+    : [];
+  const lobFilterIds = Array.isArray(lobIds)
+    ? lobIds.map((id) => String(id)).filter((id) => id)
+    : [];
+  const hasPersonFilter = personFilterIds.length > 0;
+  const hasLobFilter = lobFilterIds.length > 0;
+
   // People and expectations
-  const [roleExpectations, personOverrides, people, agencyLobs] = await Promise.all([
+  const [roleExpectations, personOverrides, people, agencyLobs, activityTypes] = await Promise.all([
     prisma.benchRoleExpectation.findMany({
       where: { role: { team: { agencyId: orgId } } },
       include: { role: { include: { team: true } } },
     }),
     prisma.benchPersonOverride.findMany({
-      where: { person: { primaryAgencyId: orgId } },
+      where: {
+        person: {
+          primaryAgencyId: orgId,
+          ...(hasPersonFilter ? { id: { in: personFilterIds } } : {}),
+        },
+      },
     }),
     prisma.person.findMany({
-      where: { primaryAgencyId: orgId },
+      where: {
+        primaryAgencyId: orgId,
+        ...(hasPersonFilter ? { id: { in: personFilterIds } } : {}),
+      },
       include: { role: true, team: true },
     }),
     prisma.lineOfBusiness.findMany({
       where: { agencyId: orgId },
       select: { id: true, name: true, premiumCategory: true },
     }),
+    prisma.activityType.findMany({
+      where: { agencyId: orgId, active: true },
+      select: { id: true },
+    }),
   ]);
 
   const lobNameById = new Map(agencyLobs.map((l) => [l.id, l.name]));
   const lobCategoryById = new Map(agencyLobs.map((l) => [l.id, l.premiumCategory]));
+  const activityTypeIds = activityTypes.map((t) => t.id);
   const overrideMap = new Map(personOverrides.map((o) => [o.personId, o]));
   const roleExpMap = new Map(roleExpectations.map((r) => [r.roleId, r]));
   const peopleWithExpectations = people.filter((p) => {
@@ -143,8 +235,10 @@ export async function getBenchmarksReport({
       (override.monthlyAppsOverride != null ||
         override.monthlyPremiumOverride != null ||
         override.premiumModeOverride != null ||
-        (override.premiumByBucketOverride && Object.keys(override.premiumByBucketOverride).length > 0) ||
-        (override.premiumByLobOverride && override.premiumByLobOverride.length > 0));
+        override.premiumByBucketOverride != null ||
+        override.premiumByLobOverride != null ||
+        override.appGoalsByLobOverrideJson != null ||
+        override.activityTargetsByTypeOverrideJson != null);
     if (hasOverride) return true;
     if (p.roleId && roleExpMap.has(p.roleId)) return true;
     return false;
@@ -156,6 +250,8 @@ export async function getBenchmarksReport({
       agencyId: orgId,
       dateSold: { gte: rangeStart, lte: rangeEnd },
       status: { in: statuses },
+      ...(hasPersonFilter ? { soldByPersonId: { in: personFilterIds } } : {}),
+      ...(hasLobFilter ? { product: { lineOfBusinessId: { in: lobFilterIds } } } : {}),
     },
     include: { product: { include: { lineOfBusiness: true } } },
   });
@@ -168,6 +264,20 @@ export async function getBenchmarksReport({
   });
   const planByYear = new Map(officePlans.map((p) => [p.year, p]));
 
+  let officePlanYear: number | undefined;
+  let officePlanAppsByLob: Record<string, number> | null = null;
+  let officePlanPremiumByBucket: { PC: number; FS: number; IPS: number } | null = null;
+  if (startYear === endYear) {
+    const plan = planByYear.get(startYear);
+    if (plan) {
+      officePlanYear = startYear;
+      officePlanAppsByLob = normalizeTargetRecord((plan as any).appGoalsByLobJson, true);
+      const annualBucketSource =
+        normalizeBucketTargets((plan as any).premiumByBucketJson) || normalizeBucketTargets(plan.premiumByBucket);
+      officePlanPremiumByBucket = annualBucketSource ? ensureBucketTargets(annualBucketSource) : null;
+    }
+  }
+
   let officeAppsTarget: number | null = 0;
   let officePremiumTarget: number | null = 0;
   const bucketTargetMap = new Map<string, number>();
@@ -176,14 +286,16 @@ export async function getBenchmarksReport({
   for (let year = startYear; year <= endYear; year++) {
     const plan = planByYear.get(year);
     if (!plan) continue;
-    const yearStart = max([startOfYear(new Date(`${year}-01-01T00:00:00`)), rangeStart]);
-    const yearEnd = min([endOfYear(new Date(`${year}-12-31T00:00:00`)), rangeEnd]);
+    const yearStartDate = new Date(year, 0, 1);
+    const yearEndDate = new Date(year, 11, 31);
+    const yearStart = max([startOfYear(yearStartDate), rangeStart]);
+    const yearEnd = min([endOfYear(yearEndDate), rangeEnd]);
     const daysInYearRange = daysInclusive(yearStart, yearEnd);
     const daysInYearTotal = daysInclusive(startOfYear(yearStart), endOfYear(yearStart));
     const fraction = daysInYearRange / daysInYearTotal;
 
-    const appsByLobTotal = sumAppGoalsByLob((plan as any).appGoalsByLobJson);
-    const appsAnnualTotal = appsByLobTotal != null ? appsByLobTotal : plan.appsAnnualTarget ?? 0;
+    const appsByLobTargets = normalizeTargetRecord((plan as any).appGoalsByLobJson, true);
+    const appsAnnualTotal = appsByLobTargets != null ? sumRecord(appsByLobTargets) : plan.appsAnnualTarget ?? 0;
     officeAppsTarget = (officeAppsTarget ?? 0) + appsAnnualTotal * fraction;
 
     const bucketSource = normalizeBucketTargets((plan as any).premiumByBucketJson) || normalizeBucketTargets(plan.premiumByBucket);
@@ -323,8 +435,9 @@ export async function getBenchmarksReport({
     const mEnd = endOfMonth(cursor);
     const rangeStartBound = mStart < rangeStart ? rangeStart : mStart;
     const rangeEndBound = mEnd > rangeEnd ? rangeEnd : mEnd;
+    const monthKey = `${mStart.getFullYear()}-${String(mStart.getMonth() + 1).padStart(2, "0")}`;
     monthBounds.push({
-      key: `${mStart.getFullYear()}-${String(mStart.getMonth() + 1).padStart(2, "0")}`,
+      key: monthKey,
       start: rangeStartBound,
       end: rangeEndBound,
       days: daysInclusive(rangeStartBound, rangeEndBound),
@@ -335,46 +448,124 @@ export async function getBenchmarksReport({
   const peopleRows: PersonRow[] = [];
   peopleWithExpectations.forEach((p) => {
     const override = overrideMap.get(p.id);
+    const roleExp = p.roleId ? roleExpMap.get(p.roleId) : undefined;
+    if (!override && !roleExp) return;
     const hasOverride =
       override &&
       (override.monthlyAppsOverride != null ||
         override.monthlyPremiumOverride != null ||
         override.premiumModeOverride != null ||
-        (override.premiumByBucketOverride && Object.keys(override.premiumByBucketOverride).length > 0) ||
-        (override.premiumByLobOverride && override.premiumByLobOverride.length > 0));
+        override.premiumByBucketOverride != null ||
+        override.premiumByLobOverride != null ||
+        override.appGoalsByLobOverrideJson != null ||
+        override.activityTargetsByTypeOverrideJson != null);
     const source = hasOverride ? "override" : "role";
-    const exp = hasOverride ? override : p.roleId ? roleExpMap.get(p.roleId) : undefined;
-    if (!exp) return;
 
-    let appsTarget = 0;
-    let premiumTarget = 0;
-    const premiumMode = hasOverride ? override?.premiumModeOverride : (exp as any)?.premiumMode;
-    const bucketPremium =
-      premiumMode === "BUCKET"
-        ? (hasOverride ? (override as any)?.premiumByBucketOverride : (exp as any)?.premiumByBucket) || null
-        : null;
-    const lobPremium =
-      premiumMode === "LOB"
-        ? (hasOverride ? (override as any)?.premiumByLobOverride : (exp as any)?.premiumByLob) || null
-        : null;
+    const appsOverride = normalizeTargetRecord(override?.appGoalsByLobOverrideJson, true);
+    const appsRole = normalizeTargetRecord(roleExp?.appGoalsByLobJson, true);
+    const activityOverride = normalizeTargetRecord(override?.activityTargetsByTypeOverrideJson, true);
+    const activityRole = normalizeTargetRecord(roleExp?.activityTargetsByTypeJson, true);
+    const bucketOverride = normalizeBucketTargets(override?.premiumByBucketOverride);
+    const bucketRole = normalizeBucketTargets(roleExp?.premiumByBucket);
+    const lobPremiumOverride = normalizePremiumByLob(override?.premiumByLobOverride);
+    const lobPremiumRole = normalizePremiumByLob(roleExp?.premiumByLob);
+    const bucketFromLobOverride = bucketTargetsFromLob(lobPremiumOverride, lobCategoryById);
+    const bucketFromLobRole = bucketTargetsFromLob(lobPremiumRole, lobCategoryById);
+
+    const hasAppsJson = override?.appGoalsByLobOverrideJson != null || roleExp?.appGoalsByLobJson != null;
+    const hasPremiumJson =
+      override?.premiumByBucketOverride != null ||
+      override?.premiumByLobOverride != null ||
+      roleExp?.premiumByBucket != null ||
+      roleExp?.premiumByLob != null;
+
+    const lobIdSet = new Set<string>();
+    agencyLobs.forEach((l) => lobIdSet.add(l.id));
+    Object.keys(appsOverride || {}).forEach((id) => lobIdSet.add(id));
+    Object.keys(appsRole || {}).forEach((id) => lobIdSet.add(id));
+
+    const legacyAppsRaw = !hasAppsJson
+      ? hasOverride
+        ? override?.monthlyAppsOverride
+        : roleExp?.monthlyAppsTarget
+      : null;
+    const legacyApps = legacyAppsRaw != null ? toNonNegativeInt(legacyAppsRaw) : null;
+    const fallbackLobId = agencyLobs[0]?.id;
+    if (legacyApps != null) {
+      lobIdSet.add(fallbackLobId || "unknown");
+    }
+
+    const lobIds = Array.from(lobIdSet);
+    const monthlyAppsByLob: Record<string, number> = {};
+    lobIds.forEach((lobId) => {
+      const overrideVal = appsOverride && Object.prototype.hasOwnProperty.call(appsOverride, lobId) ? appsOverride[lobId] : undefined;
+      const roleVal = appsRole && Object.prototype.hasOwnProperty.call(appsRole, lobId) ? appsRole[lobId] : undefined;
+      monthlyAppsByLob[lobId] = overrideVal ?? roleVal ?? 0;
+    });
+    if (legacyApps != null) {
+      monthlyAppsByLob[fallbackLobId || "unknown"] = legacyApps;
+    }
+
+    const activityIdSet = new Set<string>(activityTypeIds);
+    Object.keys(activityOverride || {}).forEach((id) => activityIdSet.add(id));
+    Object.keys(activityRole || {}).forEach((id) => activityIdSet.add(id));
+    const activityIds = Array.from(activityIdSet);
+    const monthlyActivityTargetsByType: Record<string, number> = {};
+    activityIds.forEach((activityId) => {
+      const overrideVal =
+        activityOverride && Object.prototype.hasOwnProperty.call(activityOverride, activityId)
+          ? activityOverride[activityId]
+          : undefined;
+      const roleVal =
+        activityRole && Object.prototype.hasOwnProperty.call(activityRole, activityId)
+          ? activityRole[activityId]
+          : undefined;
+      monthlyActivityTargetsByType[activityId] = overrideVal ?? roleVal ?? 0;
+    });
+
+    const monthlyBucketTargets = ensureBucketTargets({
+      PC: (bucketOverride?.PC ?? bucketFromLobOverride?.PC ?? bucketRole?.PC ?? bucketFromLobRole?.PC ?? 0),
+      FS: (bucketOverride?.FS ?? bucketFromLobOverride?.FS ?? bucketRole?.FS ?? bucketFromLobRole?.FS ?? 0),
+      IPS: (bucketOverride?.IPS ?? bucketFromLobOverride?.IPS ?? bucketRole?.IPS ?? bucketFromLobRole?.IPS ?? 0),
+    });
+
+    if (!hasPremiumJson) {
+      const legacyPremiumRaw = hasOverride ? override?.monthlyPremiumOverride : roleExp?.monthlyPremiumTarget;
+      const legacyPremium = legacyPremiumRaw != null ? toNonNegativeNumber(legacyPremiumRaw) : null;
+      if (legacyPremium != null) {
+        monthlyBucketTargets.PC = legacyPremium;
+        monthlyBucketTargets.FS = 0;
+        monthlyBucketTargets.IPS = 0;
+      }
+    }
+
+    const appsTargetsByLob: Record<string, number> = {};
+    const activityTargetsByType: Record<string, number> = {};
+    const premiumTargetsByBucket = { PC: 0, FS: 0, IPS: 0 };
+
+    Object.keys(monthlyAppsByLob).forEach((lobId) => {
+      appsTargetsByLob[lobId] = 0;
+    });
+    Object.keys(monthlyActivityTargetsByType).forEach((activityId) => {
+      activityTargetsByType[activityId] = 0;
+    });
+
     monthBounds.forEach((m) => {
       const monthTotalDays = daysInclusive(startOfMonth(m.start), endOfMonth(m.start));
       const fraction = (m.days || 0) / monthTotalDays;
-      const monthlyApps = (hasOverride ? override?.monthlyAppsOverride ?? 0 : (exp as any).monthlyAppsTarget ?? 0) as number;
-      let monthlyPremium: number;
-      if (premiumMode === "BUCKET" && bucketPremium) {
-        const pc = Number((bucketPremium as any).PC ?? 0);
-        const fs = Number((bucketPremium as any).FS ?? 0);
-        const ips = Number((bucketPremium as any).IPS ?? 0);
-        monthlyPremium = pc + fs + ips;
-      } else if (premiumMode === "LOB" && Array.isArray(lobPremium)) {
-        monthlyPremium = lobPremium.reduce((sum: number, row: any) => sum + Number(row?.premium ?? 0), 0);
-      } else {
-        monthlyPremium = (hasOverride ? override?.monthlyPremiumOverride ?? 0 : (exp as any).monthlyPremiumTarget ?? 0) as number;
-      }
-      appsTarget += monthlyApps * fraction;
-      premiumTarget += monthlyPremium * fraction;
+      Object.entries(monthlyAppsByLob).forEach(([lobId, value]) => {
+        appsTargetsByLob[lobId] = (appsTargetsByLob[lobId] || 0) + value * fraction;
+      });
+      premiumTargetsByBucket.PC += monthlyBucketTargets.PC * fraction;
+      premiumTargetsByBucket.FS += monthlyBucketTargets.FS * fraction;
+      premiumTargetsByBucket.IPS += monthlyBucketTargets.IPS * fraction;
+      Object.entries(monthlyActivityTargetsByType).forEach(([activityId, value]) => {
+        activityTargetsByType[activityId] = (activityTargetsByType[activityId] || 0) + value * fraction;
+      });
     });
+
+    const appsTarget = sumRecord(appsTargetsByLob);
+    const premiumTarget = premiumTargetsByBucket.PC + premiumTargetsByBucket.FS + premiumTargetsByBucket.IPS;
 
     const actual = personActual.get(p.id) || { apps: 0, premium: 0 };
     const expectedPremiumToDate = premiumTarget * (elapsedDays / rangeDays);
@@ -386,6 +577,9 @@ export async function getBenchmarksReport({
       premiumActual: actual.premium,
       appsTarget,
       premiumTarget,
+      appsTargetsByLob,
+      premiumTargetsByBucket,
+      activityTargetsByType,
       appsDelta: actual.apps - appsTarget,
       premiumDelta: actual.premium - premiumTarget,
       pacePremium: expectedPremiumToDate > 0 ? actual.premium / expectedPremiumToDate : null,
@@ -395,9 +589,28 @@ export async function getBenchmarksReport({
 
   peopleRows.sort((a, b) => a.name.localeCompare(b.name));
 
+  const bucketActuals: BucketActualRow[] = ["PC", "FS", "IPS"].map((bucket) => {
+    const actual = bucketActual.get(bucket) || { apps: 0, premium: 0 };
+    return { bucket, appsActual: actual.apps, premiumActual: actual.premium };
+  });
+
+  const lobActuals: LobActualRow[] = Array.from(lobActual.entries()).map(([lobId, row]) => ({
+    lobId,
+    name: lobNameById.get(lobId) || (lobId === "unknown" ? "Unknown" : lobId),
+    category: row.category ?? null,
+    appsActual: row.apps,
+    premiumActual: row.premium,
+  }));
+
   return {
     office,
     breakdown: { mode: breakdownMode, rows: breakdownRows },
     people: peopleRows,
+    lobs: agencyLobs,
+    lobActuals,
+    bucketActuals,
+    officePlanYear,
+    officePlanAppsByLob,
+    officePlanPremiumByBucket,
   };
 }

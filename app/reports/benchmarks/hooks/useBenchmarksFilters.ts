@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { toISODate } from "../lib/benchmarksMath";
-import { ALL_STATUSES, DEFAULT_STATUSES } from "../lib/benchmarksConstants";
 
-export { ALL_STATUSES, DEFAULT_STATUSES };
+export const DEFAULT_STATUSES = ["WRITTEN", "ISSUED", "PAID"];
+export const ALL_STATUSES = ["WRITTEN", "ISSUED", "PAID", "CANCELLED", "STATUS_CHECK"] as const;
 
 const STORAGE_KEY = "ttw:benchmarks:filters:v1";
 
@@ -20,6 +19,13 @@ type BenchmarksFiltersState = {
   end: Date;
   statuses: string[];
 };
+
+function toISODate(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
 
 function parseISODate(value?: string | null) {
   if (!value || value.length !== 10) return null;

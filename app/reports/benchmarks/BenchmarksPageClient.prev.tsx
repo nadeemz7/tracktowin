@@ -184,27 +184,6 @@ function getOnTrackStatus(onTrackPct: number | null) {
   return { label: "Behind", color: "#991b1b", background: "#fee2e2", border: "#fecaca" };
 }
 
-function renderStatusChip(onTrackPct: number | null) {
-  const status = getOnTrackStatus(onTrackPct);
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: "2px 8px",
-        borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 700,
-        color: status.color,
-        background: status.background,
-        border: `1px solid ${status.border}`,
-      }}
-    >
-      {status.label}
-    </span>
-  );
-}
-
 type TabButtonProps = {
   active: boolean;
   label: string;
@@ -559,17 +538,17 @@ export function BenchmarksReportView({
                 <thead>
                   <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
                     <th style={{ padding: 8 }}>Key</th>
-                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Apps Actual</th>
-                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Premium Actual</th>
+                    <th style={{ padding: 8 }}>Apps Actual</th>
+                    <th style={{ padding: 8 }}>Premium Actual</th>
                     {hasCompare ? (
-                      <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Δ Premium Actual</th>
+                      <th style={{ padding: 8 }}>Δ Premium Actual</th>
                     ) : null}
-                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Prorated Premium Target</th>
+                    <th style={{ padding: 8 }}>Prorated Premium Target</th>
                     {hasCompare ? (
-                      <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Δ Premium Target</th>
+                      <th style={{ padding: 8 }}>Δ Premium Target</th>
                     ) : null}
-                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Delta</th>
-                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Pace (to-date)</th>
+                    <th style={{ padding: 8 }}>Delta</th>
+                    <th style={{ padding: 8 }}>Pace (to-date)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -610,27 +589,27 @@ export function BenchmarksReportView({
                           </a>
                           {rowCategory ? <div style={{ color: "#6b7280", fontSize: 12 }}>{rowCategory}</div> : null}
                         </td>
-                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtInt(appsActual)}</td>
-                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: 8 }}>{fmtInt(appsActual)}</td>
+                        <td style={{ padding: 8 }}>
                           {fmtMoney(premiumActual)}
                         </td>
                         {hasCompare ? (
-                          <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <td style={{ padding: 8 }}>
                             {premiumActualDelta}
                           </td>
                         ) : null}
-                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: 8 }}>
                           {fmtMoney(premiumTarget)}
                         </td>
                         {hasCompare ? (
-                          <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <td style={{ padding: 8 }}>
                             {premiumTargetDelta}
                           </td>
                         ) : null}
-                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: 8 }}>
                           {fmtMoney(premiumDelta)}
                         </td>
-                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtPct(premiumPace)}</td>
+                        <td style={{ padding: 8 }}>{fmtPct(premiumPace)}</td>
                       </tr>
                     );
                   })}
@@ -665,15 +644,15 @@ export function BenchmarksReportView({
                 <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
                   <th style={{ padding: 8 }}>Person</th>
                   <th style={{ padding: 8 }}>Role</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Apps Actual</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Prorated Apps Target</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Premium Actual</th>
+                  <th style={{ padding: 8 }}>Apps Actual</th>
+                  <th style={{ padding: 8 }}>Prorated Apps Target</th>
+                  <th style={{ padding: 8 }}>Premium Actual</th>
                   {hasCompare ? (
-                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Δ Premium Actual</th>
+                    <th style={{ padding: 8 }}>Δ Premium Actual</th>
                   ) : null}
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Prorated Premium Target</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Delta</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Pace (to-date)</th>
+                  <th style={{ padding: 8 }}>Prorated Premium Target</th>
+                  <th style={{ padding: 8 }}>Delta</th>
+                  <th style={{ padding: 8 }}>Pace (to-date)</th>
                   <th style={{ padding: 8 }}>Expectation Source</th>
                   {!readOnly ? <th style={{ padding: 8 }}>Actions</th> : null}
                 </tr>
@@ -714,23 +693,23 @@ export function BenchmarksReportView({
                         </a>
                       </td>
                       <td style={{ padding: 8 }}>{roleName}</td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtInt(appsActual)}</td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtInt(appsTarget)}</td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <td style={{ padding: 8 }}>{fmtInt(appsActual)}</td>
+                      <td style={{ padding: 8 }}>{fmtInt(appsTarget)}</td>
+                      <td style={{ padding: 8 }}>
                         {fmtMoney(premiumActual)}
                       </td>
                       {hasCompare ? (
-                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: 8 }}>
                           {premiumActualDelta}
                         </td>
                       ) : null}
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <td style={{ padding: 8 }}>
                         {fmtMoney(premiumTarget)}
                       </td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <td style={{ padding: 8 }}>
                         {fmtMoney(currentRow?.premiumDelta)}
                       </td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtPct(premiumPace)}</td>
+                      <td style={{ padding: 8 }}>{fmtPct(premiumPace)}</td>
                       <td style={{ padding: 8 }}>{expectationLabel}</td>
                       {!readOnly ? (
                         <td style={{ padding: 8 }}>
@@ -806,8 +785,6 @@ function BenchmarksPageClientInner() {
     return clampDateToYear(base, businessPlanYear);
   }, [businessPlanAsOf, businessPlanYear, businessPlanYearEnd]);
   const businessPlanAsOfISO = useMemo(() => toISODate(businessPlanAsOfDate), [businessPlanAsOfDate]);
-  const businessPlanElapsedDays = daysInclusive(businessPlanYearStart, businessPlanAsOfDate);
-  const businessPlanTotalDays = daysInclusive(businessPlanYearStart, businessPlanYearEnd);
   const exportUrl = useMemo(
     () =>
       `/api/reports/benchmarks/export?start=${startISO}&end=${endISO}&statuses=${encodeURIComponent(
@@ -845,28 +822,9 @@ function BenchmarksPageClientInner() {
     } else if (tab === "businessPlan") {
       setActiveTab("businessPlan");
     }
-    const storedPeopleIds = window.localStorage.getItem("ttw:benchmarks:explorer:peopleIds");
-    const storedLobIds = window.localStorage.getItem("ttw:benchmarks:explorer:lobIds");
-    const storedShowTargets = window.localStorage.getItem("ttw:benchmarks:explorer:showTargets");
-    const storedPresetKey = window.localStorage.getItem("ttw:benchmarks:explorer:activePresetKey");
-    if (params.has("peopleIds")) {
-      setExplorerPeopleIds(parseCsvParam(params.get("peopleIds")));
-    } else if (storedPeopleIds) {
-      setExplorerPeopleIds(parseCsvParam(storedPeopleIds));
-    }
-    if (params.has("lobIds")) {
-      setExplorerLobIds(parseCsvParam(params.get("lobIds")));
-    } else if (storedLobIds) {
-      setExplorerLobIds(parseCsvParam(storedLobIds));
-    }
-    if (params.has("showTargets")) {
-      setExplorerShowTargets(params.get("showTargets") !== "0");
-    } else if (storedShowTargets != null) {
-      setExplorerShowTargets(storedShowTargets !== "0");
-    }
-    if (storedPresetKey && ["thisMonth", "lastMonth", "ytd", "last30"].includes(storedPresetKey)) {
-      setActivePresetKey(storedPresetKey as "thisMonth" | "lastMonth" | "ytd" | "last30");
-    }
+    setExplorerPeopleIds(parseCsvParam(params.get("peopleIds")));
+    setExplorerLobIds(parseCsvParam(params.get("lobIds")));
+    setExplorerShowTargets(params.get("showTargets") !== "0");
     explorerParamsReady.current = true;
   }, []);
 
@@ -910,18 +868,6 @@ function BenchmarksPageClientInner() {
       window.history.replaceState({}, "", next);
     }
   }, [activeTab, explorerPeopleIds, explorerLobIds, explorerShowTargets]);
-
-  useEffect(() => {
-    if (!explorerParamsReady.current || typeof window === "undefined") return;
-    window.localStorage.setItem("ttw:benchmarks:explorer:peopleIds", explorerPeopleIds.join(","));
-    window.localStorage.setItem("ttw:benchmarks:explorer:lobIds", explorerLobIds.join(","));
-    window.localStorage.setItem("ttw:benchmarks:explorer:showTargets", explorerShowTargets ? "1" : "0");
-    if (activePresetKey) {
-      window.localStorage.setItem("ttw:benchmarks:explorer:activePresetKey", activePresetKey);
-    } else {
-      window.localStorage.removeItem("ttw:benchmarks:explorer:activePresetKey");
-    }
-  }, [activePresetKey, explorerPeopleIds, explorerLobIds, explorerShowTargets]);
 
   useEffect(() => {
     if (!compareInitialized || typeof window === "undefined") return;
@@ -1474,29 +1420,16 @@ function BenchmarksPageClientInner() {
         premiumActual: actual?.premiumActual ?? 0,
       };
     });
-    rows.sort((a, b) => {
-      if (explorerShowTargets) {
-        const targetA = explorerAppsTargetsByLob.get(a.lobId) ?? 0;
-        const targetB = explorerAppsTargetsByLob.get(b.lobId) ?? 0;
-        const deltaA = (Number.isFinite(a.appsActual) ? a.appsActual : 0) - targetA;
-        const deltaB = (Number.isFinite(b.appsActual) ? b.appsActual : 0) - targetB;
-        if (deltaA !== deltaB) return deltaA - deltaB;
-      } else {
-        const actualA = Number.isFinite(a.appsActual) ? a.appsActual : 0;
-        const actualB = Number.isFinite(b.appsActual) ? b.appsActual : 0;
-        if (actualA !== actualB) return actualB - actualA;
-      }
-      return a.name.localeCompare(b.name);
-    });
+    rows.sort((a, b) => a.name.localeCompare(b.name));
     return rows;
-  }, [explorerAppsTargetsByLob, explorerLobActuals, explorerLobIds, explorerShowTargets, lobById]);
+  }, [explorerLobActuals, explorerLobIds, lobById]);
 
   const explorerBucketRows = useMemo(() => {
     const actualMap = new Map<string, BucketActualRow>();
     explorerBucketActuals.forEach((row) => {
       actualMap.set(row.bucket, row);
     });
-    const rows = ["PC", "FS", "IPS"].map((bucket) => {
+    return ["PC", "FS", "IPS"].map((bucket) => {
       const actual = actualMap.get(bucket);
       return {
         bucket,
@@ -1504,75 +1437,11 @@ function BenchmarksPageClientInner() {
         premiumActual: actual?.premiumActual ?? 0,
       };
     });
-    rows.sort((a, b) => {
-      if (explorerShowTargets) {
-        const targetA = explorerBucketTargets[a.bucket as keyof typeof explorerBucketTargets] ?? 0;
-        const targetB = explorerBucketTargets[b.bucket as keyof typeof explorerBucketTargets] ?? 0;
-        const deltaA = (Number.isFinite(a.premiumActual) ? a.premiumActual : 0) - targetA;
-        const deltaB = (Number.isFinite(b.premiumActual) ? b.premiumActual : 0) - targetB;
-        if (deltaA !== deltaB) return deltaA - deltaB;
-      } else {
-        const actualA = Number.isFinite(a.premiumActual) ? a.premiumActual : 0;
-        const actualB = Number.isFinite(b.premiumActual) ? b.premiumActual : 0;
-        if (actualA !== actualB) return actualB - actualA;
-      }
-      return a.bucket.localeCompare(b.bucket);
-    });
-    return rows;
-  }, [explorerBucketActuals, explorerBucketTargets, explorerShowTargets]);
-
-  const explorerAppsTotals = useMemo(() => {
-    const actual = explorerLobRows.reduce(
-      (sum, row) => sum + (Number.isFinite(row.appsActual) ? row.appsActual : 0),
-      0
-    );
-    const target = explorerLobRows.reduce((sum, row) => sum + (explorerAppsTargetsByLob.get(row.lobId) ?? 0), 0);
-    return { actual, target, delta: actual - target };
-  }, [explorerAppsTargetsByLob, explorerLobRows]);
-
-  const explorerPremiumTotals = useMemo(() => {
-    const actual = explorerBucketRows.reduce(
-      (sum, row) => sum + (Number.isFinite(row.premiumActual) ? row.premiumActual : 0),
-      0
-    );
-    const target = explorerBucketRows.reduce(
-      (sum, row) => sum + (explorerBucketTargets[row.bucket as keyof typeof explorerBucketTargets] ?? 0),
-      0
-    );
-    return { actual, target, delta: actual - target };
-  }, [explorerBucketRows, explorerBucketTargets]);
+  }, [explorerBucketActuals]);
 
   const explorerPeopleRows = useMemo(() => {
-    const rows = [...explorerSelectedPeople];
-    rows.sort((a, b) => {
-      if (explorerShowTargets) {
-        const targetA = Number.isFinite(a.premiumTarget) ? a.premiumTarget : 0;
-        const targetB = Number.isFinite(b.premiumTarget) ? b.premiumTarget : 0;
-        const deltaA = (Number.isFinite(a.premiumActual) ? a.premiumActual : 0) - targetA;
-        const deltaB = (Number.isFinite(b.premiumActual) ? b.premiumActual : 0) - targetB;
-        if (deltaA !== deltaB) return deltaA - deltaB;
-      } else {
-        const actualA = Number.isFinite(a.premiumActual) ? a.premiumActual : 0;
-        const actualB = Number.isFinite(b.premiumActual) ? b.premiumActual : 0;
-        if (actualA !== actualB) return actualB - actualA;
-      }
-      return a.name.localeCompare(b.name);
-    });
-    return rows;
-  }, [explorerSelectedPeople, explorerShowTargets]);
-
-  const explorerPeopleTotals = useMemo(() => {
-    return explorerPeopleRows.reduce(
-      (acc, person) => {
-        acc.appsActual += Number.isFinite(person.appsActual) ? person.appsActual : 0;
-        acc.appsTarget += Number.isFinite(person.appsTarget) ? person.appsTarget : 0;
-        acc.premiumActual += Number.isFinite(person.premiumActual) ? person.premiumActual : 0;
-        acc.premiumTarget += Number.isFinite(person.premiumTarget) ? person.premiumTarget : 0;
-        return acc;
-      },
-      { appsActual: 0, appsTarget: 0, premiumActual: 0, premiumTarget: 0 }
-    );
-  }, [explorerPeopleRows]);
+    return [...explorerPeople].sort((a, b) => a.name.localeCompare(b.name));
+  }, [explorerPeople]);
 
   const explorerBucketsEmpty = useMemo(
     () => explorerBucketRows.every((row) => row.appsActual === 0 && row.premiumActual === 0),
@@ -1595,6 +1464,8 @@ function BenchmarksPageClientInner() {
   const isExplorer = activeTab === "explorer";
   const isBusinessPlan = activeTab === "businessPlan";
   const isBenchmarks = activeTab === "benchmarks";
+  const businessPlanAppsStatus = getOnTrackStatus(businessPlanAppsTotals.onTrack);
+  const businessPlanPremiumStatus = getOnTrackStatus(businessPlanPremiumTotals.onTrack);
 
   const renderBenchmarksTab = () => (
     <>
@@ -1687,18 +1558,18 @@ function BenchmarksPageClientInner() {
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
                   <th style={{ padding: 6 }}>Metric</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Current</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Snapshot</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Δ</th>
+                  <th style={{ padding: 6 }}>Current</th>
+                  <th style={{ padding: 6 }}>Snapshot</th>
+                  <th style={{ padding: 6 }}>Δ</th>
                 </tr>
               </thead>
               <tbody>
                 {compareOfficeRows.map((row) => (
                   <tr key={row.label} style={{ borderBottom: "1px solid #f3f4f6" }}>
                     <td style={{ padding: 6 }}>{row.label}</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{row.current}</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{row.snapshot}</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{row.delta}</td>
+                    <td style={{ padding: 6 }}>{row.current}</td>
+                    <td style={{ padding: 6 }}>{row.snapshot}</td>
+                    <td style={{ padding: 6 }}>{row.delta}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1787,131 +1658,122 @@ function BenchmarksPageClientInner() {
     </>
   );
 
-  const renderBusinessPlanTab = () => {
-    return (
-      <>
-        <Section title="Summary">
-          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-            <div className="surface" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 800, marginBottom: 8 }}>Apps</div>
-              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Actual (YTD)</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtInt(businessPlanAppsTotals.actual)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Target (Annual)</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtInt(businessPlanAppsTotals.target)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>% to goal</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtPct(businessPlanAppsTotals.toGoal)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>On-track %</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtPct(businessPlanAppsTotals.onTrack)}</div>
-                </div>
-              </div>
-            </div>
-            <div className="surface" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 800, marginBottom: 8 }}>Premium</div>
-              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Actual (YTD)</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtMoney(businessPlanPremiumTotals.actual)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Target (Annual)</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtMoney(businessPlanPremiumTotals.target)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>% to goal</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtPct(businessPlanPremiumTotals.toGoal)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>On-track %</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtPct(businessPlanPremiumTotals.onTrack)}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </Section>
-        <div className="surface" style={{ padding: 12, display: "grid", gap: 12 }}>
-          <div style={{ display: "grid", gap: 12, alignItems: "start", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+  const renderBusinessPlanTab = () => (
+    <>
+      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+        <div className="surface" style={{ padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>Apps</div>
+          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
             <div>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Year</div>
-              <select
-                value={businessPlanYear}
-                onChange={(e) => setBusinessPlanYear(Number(e.target.value))}
-                style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", width: "100%" }}
-              >
-                {businessPlanYears.map((year) => (
-                  <option key={year} value={year}>
-                    {year}
-                  </option>
-                ))}
-              </select>
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Actual (YTD)</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtInt(businessPlanAppsTotals.actual)}</div>
             </div>
             <div>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>As of</div>
-              <input
-                type="date"
-                value={businessPlanAsOf}
-                min={businessPlanYearStartISO}
-                max={businessPlanYearEndISO}
-                onChange={(e) => {
-                  const parsed = parseISODate(e.target.value);
-                  if (!parsed) return;
-                  const clamped = clampDateToYear(parsed, businessPlanYear);
-                  setBusinessPlanAsOf(toISODate(clamped));
-                }}
-                style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", width: "100%" }}
-              />
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Target (Annual)</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtInt(businessPlanAppsTotals.target)}</div>
             </div>
             <div>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Status</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, color: "#111827" }}>
-                {allStatuses.map((s) => {
-                  const checked = statuses.includes(s);
-                  return (
-                    <label key={s} style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 13 }}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleStatus(s)}
-                        style={{ width: 14, height: 14 }}
-                      />
-                      {s}
-                    </label>
-                  );
-                })}
-              </div>
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>% to goal</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtPct(businessPlanAppsTotals.toGoal)}</div>
             </div>
-          </div>
-          <div style={{ color: "#6b7280", fontSize: 12 }}>
-            Targets are annual. On-track compares actuals to expected pace as of the selected date.
-          </div>
-          <div style={{ color: "#6b7280", fontSize: 12 }}>
-            As of {businessPlanAsOfISO} • {businessPlanElapsedDays} of {businessPlanTotalDays} days
+            <div>
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>On-track %</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtPct(businessPlanAppsTotals.onTrack)}</div>
+            </div>
           </div>
         </div>
+        <div className="surface" style={{ padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>Premium</div>
+          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
+            <div>
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Actual (YTD)</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtMoney(businessPlanPremiumTotals.actual)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Target (Annual)</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtMoney(businessPlanPremiumTotals.target)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>% to goal</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtPct(businessPlanPremiumTotals.toGoal)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>On-track %</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmtPct(businessPlanPremiumTotals.onTrack)}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="surface" style={{ padding: 12, display: "grid", gap: 12 }}>
+        <div style={{ display: "grid", gap: 12, alignItems: "start", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Year</div>
+            <select
+              value={businessPlanYear}
+              onChange={(e) => setBusinessPlanYear(Number(e.target.value))}
+              style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", width: "100%" }}
+            >
+              {businessPlanYears.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>As of</div>
+            <input
+              type="date"
+              value={businessPlanAsOf}
+              min={businessPlanYearStartISO}
+              max={businessPlanYearEndISO}
+              onChange={(e) => {
+                const parsed = parseISODate(e.target.value);
+                if (!parsed) return;
+                const clamped = clampDateToYear(parsed, businessPlanYear);
+                setBusinessPlanAsOf(toISODate(clamped));
+              }}
+              style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", width: "100%" }}
+            />
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Status</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, color: "#111827" }}>
+              {allStatuses.map((s) => {
+                const checked = statuses.includes(s);
+                return (
+                  <label key={s} style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleStatus(s)}
+                      style={{ width: 14, height: 14 }}
+                    />
+                    {s}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+        <div style={{ color: "#6b7280", fontSize: 12 }}>
+          Targets are annual. On-track compares actuals to expected pace as of the selected date.
+        </div>
+      </div>
 
-        {businessPlanLoading ? <div className="surface" style={{ padding: 12 }}>Loading…</div> : null}
-        {businessPlanError ? <div className="surface" style={{ padding: 12, color: "#b91c1c" }}>{businessPlanError}</div> : null}
+      {businessPlanLoading ? <div className="surface" style={{ padding: 12 }}>Loading…</div> : null}
+      {businessPlanError ? <div className="surface" style={{ padding: 12, color: "#b91c1c" }}>{businessPlanError}</div> : null}
 
-        {!businessPlanLoading &&
-        !businessPlanError &&
-        (businessPlanPlanYear !== businessPlanYear || !businessPlanAppsByLob || !businessPlanPremiumByBucket) ? (
-          <EmptyState
-            title={`Office Plan targets missing for ${businessPlanYear}`}
-            body="Set an Office Plan for this year to view progress vs goal."
-            action={
-              <a href="/people?tab=office" style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}>
-                Set Office Plan for {businessPlanYear}
-              </a>
-            }
-          />
-        ) : null}
+      {!businessPlanLoading &&
+      !businessPlanError &&
+      (businessPlanPlanYear !== businessPlanYear || !businessPlanAppsByLob || !businessPlanPremiumByBucket) ? (
+        <div className="surface" style={{ padding: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 4 }}>Office Plan targets missing for {businessPlanYear}</div>
+          <a href={`/people?tab=office`} style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}>
+            Set Office Plan for {businessPlanYear}
+          </a>
+        </div>
+      ) : null}
 
       <Section title="Apps by LoB">
         {businessPlanLobRows.length === 0 ? (
@@ -1922,34 +1784,49 @@ function BenchmarksPageClientInner() {
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
                   <th style={{ padding: 6 }}>LoB</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Actual (YTD)</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Target (Annual)</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>% to goal</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>On-track %</th>
+                  <th style={{ padding: 6 }}>Actual (YTD)</th>
+                  <th style={{ padding: 6 }}>Target (Annual)</th>
+                  <th style={{ padding: 6 }}>% to goal</th>
+                  <th style={{ padding: 6 }}>On-track %</th>
                   <th style={{ padding: 6 }}>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {businessPlanLobRows.map((row) => {
+                  const status = getOnTrackStatus(row.onTrack);
                   return (
                     <tr key={row.lobId} style={{ borderBottom: "1px solid #f3f4f6" }}>
                       <td style={{ padding: 6 }}>
                         <a
-                          href={`/sold-products?lobId=${encodeURIComponent(row.lobId)}&lob=${encodeURIComponent(row.name)}&dateFrom=${businessPlanYearStartISO}&dateTo=${businessPlanAsOfISO}&statuses=${statusesParam}`}
+                          href={`/sold-products?lob=${encodeURIComponent(row.name)}&dateFrom=${businessPlanYearStartISO}&dateTo=${businessPlanAsOfISO}&statuses=${statusesParam}`}
                           style={{ color: "#111827", textDecoration: "none", fontWeight: 600 }}
                         >
                           {row.name}
                         </a>
                         {row.category ? <div style={{ color: "#6b7280", fontSize: 12 }}>{row.category}</div> : null}
                       </td>
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <td style={{ padding: 6 }}>
                         {fmtInt(row.appsActual)}
                       </td>
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{fmtInt(row.target)}</td>
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{fmtPct(row.toGoal)}</td>
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{fmtPct(row.onTrack)}</td>
+                      <td style={{ padding: 6 }}>{fmtInt(row.target)}</td>
+                      <td style={{ padding: 6 }}>{fmtPct(row.toGoal)}</td>
+                      <td style={{ padding: 6 }}>{fmtPct(row.onTrack)}</td>
                       <td style={{ padding: 6 }}>
-                        {renderStatusChip(row.onTrack)}
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: status.color,
+                            background: status.background,
+                            border: `1px solid ${status.border}`,
+                          }}
+                        >
+                          {status.label}
+                        </span>
                       </td>
                     </tr>
                   );
@@ -1957,20 +1834,34 @@ function BenchmarksPageClientInner() {
                 {businessPlanLobRows.length ? (
                   <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700 }}>
                     <td style={{ padding: 6 }}>Total</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: 6 }}>
                       {fmtInt(businessPlanAppsTotals.actual)}
                     </td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: 6 }}>
                       {fmtInt(businessPlanAppsTotals.target)}
                     </td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: 6 }}>
                       {fmtPct(businessPlanAppsTotals.toGoal)}
                     </td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: 6 }}>
                       {fmtPct(businessPlanAppsTotals.onTrack)}
                     </td>
                     <td style={{ padding: 6 }}>
-                      {renderStatusChip(businessPlanAppsTotals.onTrack)}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: businessPlanAppsStatus.color,
+                          background: businessPlanAppsStatus.background,
+                          border: `1px solid ${businessPlanAppsStatus.border}`,
+                        }}
+                      >
+                        {businessPlanAppsStatus.label}
+                      </span>
                     </td>
                   </tr>
                 ) : null}
@@ -1989,15 +1880,16 @@ function BenchmarksPageClientInner() {
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
                   <th style={{ padding: 6 }}>Bucket</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Actual (YTD)</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Target (Annual)</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>% to goal</th>
-                  <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>On-track %</th>
+                  <th style={{ padding: 6 }}>Actual (YTD)</th>
+                  <th style={{ padding: 6 }}>Target (Annual)</th>
+                  <th style={{ padding: 6 }}>% to goal</th>
+                  <th style={{ padding: 6 }}>On-track %</th>
                   <th style={{ padding: 6 }}>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {businessPlanBucketRows.map((row) => {
+                  const status = getOnTrackStatus(row.onTrack);
                   return (
                     <tr key={row.bucket} style={{ borderBottom: "1px solid #f3f4f6" }}>
                       <td style={{ padding: 6 }}>
@@ -2008,14 +1900,28 @@ function BenchmarksPageClientInner() {
                           {row.bucket}
                         </a>
                       </td>
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <td style={{ padding: 6 }}>
                         {fmtMoney(row.premiumActual)}
                       </td>
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{fmtMoney(row.target)}</td>
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{fmtPct(row.toGoal)}</td>
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>{fmtPct(row.onTrack)}</td>
+                      <td style={{ padding: 6 }}>{fmtMoney(row.target)}</td>
+                      <td style={{ padding: 6 }}>{fmtPct(row.toGoal)}</td>
+                      <td style={{ padding: 6 }}>{fmtPct(row.onTrack)}</td>
                       <td style={{ padding: 6 }}>
-                        {renderStatusChip(row.onTrack)}
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: status.color,
+                            background: status.background,
+                            border: `1px solid ${status.border}`,
+                          }}
+                        >
+                          {status.label}
+                        </span>
                       </td>
                     </tr>
                   );
@@ -2023,20 +1929,34 @@ function BenchmarksPageClientInner() {
                 {businessPlanBucketRows.length ? (
                   <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700 }}>
                     <td style={{ padding: 6 }}>Total</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: 6 }}>
                       {fmtMoney(businessPlanPremiumTotals.actual)}
                     </td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: 6 }}>
                       {fmtMoney(businessPlanPremiumTotals.target)}
                     </td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: 6 }}>
                       {fmtPct(businessPlanPremiumTotals.toGoal)}
                     </td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: 6 }}>
                       {fmtPct(businessPlanPremiumTotals.onTrack)}
                     </td>
                     <td style={{ padding: 6 }}>
-                      {renderStatusChip(businessPlanPremiumTotals.onTrack)}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: businessPlanPremiumStatus.color,
+                          background: businessPlanPremiumStatus.background,
+                          border: `1px solid ${businessPlanPremiumStatus.border}`,
+                        }}
+                      >
+                        {businessPlanPremiumStatus.label}
+                      </span>
                     </td>
                   </tr>
                 ) : null}
@@ -2046,19 +1966,10 @@ function BenchmarksPageClientInner() {
         )}
       </Section>
     </>
-    );
-  };
+  );
 
-  const renderExplorerTab = () => {
-    const appsStatus = getOnTrackStatus(
-      explorerAppsTotals.target > 0 ? explorerAppsTotals.actual / explorerAppsTotals.target : null
-    );
-    const premiumStatus = getOnTrackStatus(
-      explorerPremiumTotals.target > 0 ? explorerPremiumTotals.actual / explorerPremiumTotals.target : null
-    );
-
-    return (
-      <>
+  const renderExplorerTab = () => (
+    <>
       <div
         style={{
           background: "#fff",
@@ -2272,72 +2183,6 @@ function BenchmarksPageClientInner() {
         Targets are prorated to match the selected date range.
       </div>
 
-      <Section title="Summary">
-        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-          <div className="surface" style={{ padding: 12 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Apps</div>
-            <div style={{ display: "grid", gap: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Actual</div>
-                <div style={{ fontWeight: 800 }}>{fmtInt(explorerAppsTotals.actual)}</div>
-              </div>
-              {explorerShowTargets ? (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Target</div>
-                    <div style={{ fontWeight: 800 }}>{fmtInt(explorerAppsTotals.target)}</div>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Δ</div>
-                    <div style={{ fontWeight: 800 }}>{formatDelta(explorerAppsTotals.delta, fmtInt)}</div>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Status</div>
-                    {(() => {
-                      const actual = explorerAppsTotals.actual;
-                      const target = explorerAppsTotals.target;
-                      const onTrackPct = target > 0 ? actual / target : null;
-                      return renderStatusChip(onTrackPct);
-                    })()}
-                  </div>
-                </>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="surface" style={{ padding: 12 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Premium</div>
-            <div style={{ display: "grid", gap: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Actual</div>
-                <div style={{ fontWeight: 800 }}>{fmtMoney(explorerPremiumTotals.actual)}</div>
-              </div>
-              {explorerShowTargets ? (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Target</div>
-                    <div style={{ fontWeight: 800 }}>{fmtMoney(explorerPremiumTotals.target)}</div>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Δ</div>
-                    <div style={{ fontWeight: 800 }}>{formatDelta(explorerPremiumTotals.delta, fmtMoney)}</div>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Status</div>
-                    {(() => {
-                      const actual = explorerPremiumTotals.actual;
-                      const target = explorerPremiumTotals.target;
-                      const onTrackPct = target > 0 ? actual / target : null;
-                      return renderStatusChip(onTrackPct);
-                    })()}
-                  </div>
-                </>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </Section>
-
       {explorerLoading ? <div className="surface" style={{ padding: 12 }}>Loading…</div> : null}
       {explorerError ? (
         <div className="surface" style={{ padding: 12, color: "#b91c1c" }}>
@@ -2345,121 +2190,79 @@ function BenchmarksPageClientInner() {
         </div>
       ) : null}
 
-      {showExplorerEmptyState ? (
-        <EmptyState
-          title="No activity in this range."
-          body="Adjust the date range or check Sold Products to confirm production was recorded."
-          action={
-            <a href="/sold-products" style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}>
-              Go to Sold Products
-            </a>
-          }
-        />
-      ) : null}
+      {showExplorerEmptyState ? <EmptyState title="No data." /> : null}
 
       {!showExplorerEmptyState ? (
         <div style={{ display: "grid", gap: 16 }}>
           <Section title="Apps by LoB">
-            <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 8 }}>
-              {explorerShowTargets ? "Sorted by variance (most behind first)." : "Sorted by actual (highest first)."}
-            </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
                     <th style={{ padding: 6 }}>LoB</th>
-                    <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Apps Actual</th>
+                    <th style={{ padding: 6 }}>Apps Actual</th>
                     {explorerShowTargets ? (
-                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Apps Target</th>
+                      <th style={{ padding: 6 }}>Apps Target</th>
                     ) : null}
                     {explorerShowTargets ? (
-                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Δ</th>
+                      <th style={{ padding: 6 }}>Δ</th>
                     ) : null}
-                    {explorerShowTargets ? <th style={{ padding: 6 }}>Status</th> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {explorerLobRows.map((row) => {
                     const target = explorerAppsTargetsByLob.get(row.lobId) ?? 0;
                     const delta = row.appsActual - target;
-                    const onTrackPct = target > 0 ? row.appsActual / target : null;
                     return (
                       <tr key={row.lobId} style={{ borderBottom: "1px solid #f3f4f6" }}>
                         <td style={{ padding: 6 }}>
                           <a
-                            href={`/sold-products?lobId=${encodeURIComponent(row.lobId)}&lob=${encodeURIComponent(row.name)}&dateFrom=${startISO}&dateTo=${endISO}&statuses=${statusesParam}${explorerPersonParam}`}
+                            href={`/sold-products?lob=${encodeURIComponent(row.name)}&dateFrom=${startISO}&dateTo=${endISO}&statuses=${statusesParam}${explorerPersonParam}`}
                             style={{ color: "#111827", textDecoration: "none", fontWeight: 600 }}
                           >
                             {row.name}
                           </a>
                         </td>
-                        <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: 6 }}>
                           {fmtInt(row.appsActual)}
                         </td>
                         {explorerShowTargets ? (
-                          <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <td style={{ padding: 6 }}>
                             {fmtInt(target)}
                           </td>
                         ) : null}
                         {explorerShowTargets ? (
-                          <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                            {formatDelta(delta, fmtInt)}
-                          </td>
-                        ) : null}
-                        {explorerShowTargets ? (
                           <td style={{ padding: 6 }}>
-                            {renderStatusChip(onTrackPct)}
+                            {formatDelta(delta, fmtInt)}
                           </td>
                         ) : null}
                       </tr>
                     );
                   })}
-                  <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700 }}>
-                    <td style={{ padding: 6 }}>Total</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {fmtInt(explorerAppsTotals.actual)}
-                    </td>
-                    {explorerShowTargets ? (
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtInt(explorerAppsTotals.target)}
-                      </td>
-                    ) : null}
-                    {explorerShowTargets ? (
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {formatDelta(explorerAppsTotals.delta, fmtInt)}
-                      </td>
-                    ) : null}
-                    {explorerShowTargets ? <td style={{ padding: 6, color: "#6b7280" }}>—</td> : null}
-                  </tr>
                 </tbody>
               </table>
             </div>
           </Section>
 
           <Section title="Premium by Bucket">
-            <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 8 }}>
-              {explorerShowTargets ? "Sorted by variance (most behind first)." : "Sorted by actual (highest first)."}
-            </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
                     <th style={{ padding: 6 }}>Bucket</th>
-                    <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Premium Actual</th>
+                    <th style={{ padding: 6 }}>Premium Actual</th>
                     {explorerShowTargets ? (
-                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Premium Target</th>
+                      <th style={{ padding: 6 }}>Premium Target</th>
                     ) : null}
                     {explorerShowTargets ? (
-                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Δ</th>
+                      <th style={{ padding: 6 }}>Δ</th>
                     ) : null}
-                    {explorerShowTargets ? <th style={{ padding: 6 }}>Status</th> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {explorerBucketRows.map((row) => {
                     const target = explorerBucketTargets[row.bucket as keyof typeof explorerBucketTargets] ?? 0;
                     const delta = row.premiumActual - target;
-                    const onTrackPct = target > 0 ? row.premiumActual / target : null;
                     return (
                       <tr key={row.bucket} style={{ borderBottom: "1px solid #f3f4f6" }}>
                         <td style={{ padding: 6 }}>
@@ -2470,122 +2273,65 @@ function BenchmarksPageClientInner() {
                             {row.bucket}
                           </a>
                         </td>
-                        <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: 6 }}>
                           {fmtMoney(row.premiumActual)}
                         </td>
                         {explorerShowTargets ? (
-                          <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <td style={{ padding: 6 }}>
                             {fmtMoney(target)}
                           </td>
                         ) : null}
                         {explorerShowTargets ? (
-                          <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                            {formatDelta(delta, fmtMoney)}
-                          </td>
-                        ) : null}
-                        {explorerShowTargets ? (
                           <td style={{ padding: 6 }}>
-                            {renderStatusChip(onTrackPct)}
+                            {formatDelta(delta, fmtMoney)}
                           </td>
                         ) : null}
                       </tr>
                     );
                   })}
-                  <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700 }}>
-                    <td style={{ padding: 6 }}>Total</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {fmtMoney(explorerPremiumTotals.actual)}
-                    </td>
-                    {explorerShowTargets ? (
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtMoney(explorerPremiumTotals.target)}
-                      </td>
-                    ) : null}
-                    {explorerShowTargets ? (
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {formatDelta(explorerPremiumTotals.delta, fmtMoney)}
-                      </td>
-                    ) : null}
-                    {explorerShowTargets ? <td style={{ padding: 6, color: "#6b7280" }}>—</td> : null}
-                  </tr>
                 </tbody>
               </table>
             </div>
           </Section>
 
           <Section title="People">
-            <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 8 }}>
-              {explorerShowTargets
-                ? "Sorted by variance (most behind first)."
-                : "Sorted by premium actual (highest first)."}
-            </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
                     <th style={{ padding: 6 }}>Person</th>
-                    <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Apps Actual</th>
+                    <th style={{ padding: 6 }}>Apps Actual</th>
                     {explorerShowTargets ? (
-                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Apps Target</th>
+                      <th style={{ padding: 6 }}>Apps Target</th>
                     ) : null}
-                    <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Premium Actual</th>
+                    <th style={{ padding: 6 }}>Premium Actual</th>
                     {explorerShowTargets ? (
-                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Premium Target</th>
+                      <th style={{ padding: 6 }}>Premium Target</th>
                     ) : null}
-                    {explorerShowTargets ? <th style={{ padding: 6 }}>Status</th> : null}
                   </tr>
                 </thead>
                 <tbody>
-                  {explorerPeopleRows.map((person) => {
-                    const onTrackPct =
-                      person.premiumTarget > 0 ? person.premiumActual / person.premiumTarget : null;
-                    return (
-                      <tr key={person.personId} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                        <td style={{ padding: 6 }}>{person.name}</td>
-                        <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                          {fmtInt(person.appsActual)}
-                        </td>
-                        {explorerShowTargets ? (
-                          <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                            {fmtInt(person.appsTarget)}
-                          </td>
-                        ) : null}
-                        <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                          {fmtMoney(person.premiumActual)}
-                        </td>
-                        {explorerShowTargets ? (
-                          <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                            {fmtMoney(person.premiumTarget)}
-                          </td>
-                        ) : null}
-                        {explorerShowTargets ? (
-                          <td style={{ padding: 6 }}>
-                            {renderStatusChip(onTrackPct)}
-                          </td>
-                        ) : null}
-                      </tr>
-                    );
-                  })}
-                  <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700 }}>
-                    <td style={{ padding: 6 }}>Total</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {fmtInt(explorerPeopleTotals.appsActual)}
-                    </td>
-                    {explorerShowTargets ? (
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtInt(explorerPeopleTotals.appsTarget)}
+                  {explorerPeopleRows.map((person) => (
+                    <tr key={person.personId} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                      <td style={{ padding: 6 }}>{person.name}</td>
+                      <td style={{ padding: 6 }}>
+                        {fmtInt(person.appsActual)}
                       </td>
-                    ) : null}
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {fmtMoney(explorerPeopleTotals.premiumActual)}
-                    </td>
-                    {explorerShowTargets ? (
-                      <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtMoney(explorerPeopleTotals.premiumTarget)}
+                      {explorerShowTargets ? (
+                        <td style={{ padding: 6 }}>
+                          {fmtInt(person.appsTarget)}
+                        </td>
+                      ) : null}
+                      <td style={{ padding: 6 }}>
+                        {fmtMoney(person.premiumActual)}
                       </td>
-                    ) : null}
-                    {explorerShowTargets ? <td style={{ padding: 6, color: "#6b7280" }}>—</td> : null}
-                  </tr>
+                      {explorerShowTargets ? (
+                        <td style={{ padding: 6 }}>
+                          {fmtMoney(person.premiumTarget)}
+                        </td>
+                      ) : null}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -2593,8 +2339,7 @@ function BenchmarksPageClientInner() {
         </div>
       ) : null}
     </>
-    );
-  };
+  );
 
   const TabsRow = () => (
     <div className="surface" style={{ display: "flex", gap: 8, padding: 8, flexWrap: "wrap" }}>

@@ -1,12 +1,11 @@
 import { AppShell } from "@/app/components/AppShell";
-import Link from "next/link";
-import { DateRangePicker } from "@/app/activities/DateRangePicker";
+import { DatePicker1RangeClient, ResetFiltersButton } from "@/app/components/DatePicker1RangeClient";
 import { NewSoldProductForm } from "@/app/sold-products/NewSoldProductForm";
 import { prisma } from "@/lib/prisma";
 import { PolicyStatus, PremiumCategory } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { formatISO, subDays } from "date-fns";
+import { endOfMonth, format, formatISO, startOfMonth, startOfQuarter, startOfYear, subDays, subMonths } from "date-fns";
 import { MultiCheck } from "./MultiCheck";
 import { AutoSubmit } from "./AutoSubmit";
 
@@ -19,10 +18,13 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
     (Array.isArray(v) ? v : (v || "").split(","))
       .map((s) => s.trim())
       .filter(Boolean);
+  const getParamValue = (value: string | string[] | undefined) =>
+    Array.isArray(value) ? value[0] : value;
 
   const selectedAgencyIds = toArray(sp.agencies ?? sp.agencyId);
-  const startDefault = formatISO(subDays(new Date(), 30), { representation: "date" });
-  const endDefault = formatISO(new Date(), { representation: "date" });
+  const today = new Date();
+  const startDefault = formatISO(subDays(today, 30), { representation: "date" });
+  const endDefault = formatISO(today, { representation: "date" });
   const startDateStr =
     (typeof sp.start === "string" ? sp.start : undefined) ||
     (typeof sp.dateFrom === "string" ? sp.dateFrom : undefined) ||
@@ -31,6 +33,33 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
     (typeof sp.end === "string" ? sp.end : undefined) ||
     (typeof sp.dateTo === "string" ? sp.dateTo : undefined) ||
     endDefault;
+  const todayStr = format(today, "yyyy-MM-dd");
+  const thisMonthStartStr = format(startOfMonth(today), "yyyy-MM-dd");
+  const lastMonth = subMonths(today, 1);
+  const lastMonthStartStr = format(startOfMonth(lastMonth), "yyyy-MM-dd");
+  const lastMonthEndStr = format(endOfMonth(lastMonth), "yyyy-MM-dd");
+  const qtdStartStr = format(startOfQuarter(today), "yyyy-MM-dd");
+  const ytdStartStr = format(startOfYear(today), "yyyy-MM-dd");
+  const datePresets = [
+    { key: "today", label: "Today", start: todayStr, end: todayStr },
+    { key: "this-month", label: "This Month", start: thisMonthStartStr, end: todayStr },
+    { key: "last-month", label: "Last Month", start: lastMonthStartStr, end: lastMonthEndStr },
+    { key: "qtd", label: "QTD", start: qtdStartStr, end: todayStr },
+    { key: "ytd", label: "YTD", start: ytdStartStr, end: todayStr },
+  ];
+  const resetClearKeys = [
+    "q",
+    "agencies",
+    "agencyId",
+    "statuses",
+    "status",
+    "personId",
+    "soldByPersonId",
+    "lob",
+    "lobId",
+    "premiumCategory",
+    "businessOnly",
+  ];
   const businessOnly = sp.businessOnly === "1";
   const statusFilter = toArray(sp.statuses ?? sp.status) as PolicyStatus[];
   const personFilter =
@@ -56,6 +85,43 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
   const q = (typeof sp.q === "string" ? sp.q : "").trim();
   const preselectHouseholdId = (sp.householdId || "").trim();
   const openFlag = sp.open === "1";
+  const startParam = getParamValue(sp.start);
+  const endParam = getParamValue(sp.end);
+  const dateFromParam = getParamValue(sp.dateFrom);
+  const dateToParam = getParamValue(sp.dateTo);
+  const startKey = startParam ? "start" : dateFromParam ? "dateFrom" : "";
+  const endKey = endParam ? "end" : dateToParam ? "dateTo" : "";
+  const personParamKey =
+    typeof sp.personId === "string"
+      ? "personId"
+      : typeof sp.soldByPersonId === "string"
+        ? "soldByPersonId"
+        : "personId";
+  const returnToParams = new URLSearchParams();
+  if (startKey) returnToParams.set(startKey, startDateStr);
+  if (endKey) returnToParams.set(endKey, endDateStr);
+  if (selectedAgencyIds.length) {
+    returnToParams.set(sp.agencies != null ? "agencies" : "agencyId", selectedAgencyIds.join(","));
+  }
+  if (statusFilter.length) {
+    returnToParams.set(sp.statuses != null ? "statuses" : "status", statusFilter.join(","));
+  }
+  if (personFilter) {
+    returnToParams.set(personParamKey, personFilter);
+  }
+  if (selectedLobIds.length) returnToParams.set("lobId", selectedLobIds.join(","));
+  if (selectedLobNames.length) returnToParams.set("lob", selectedLobNames.join(","));
+  if (premiumCategoryFilter) returnToParams.set("premiumCategory", premiumCategoryFilter);
+  if (businessOnly) returnToParams.set("businessOnly", "1");
+  if (q) returnToParams.set("q", q);
+  const householdIdParam = typeof sp.householdId === "string" ? sp.householdId.trim() : "";
+  if (householdIdParam) returnToParams.set("householdId", householdIdParam);
+  const openParam = typeof sp.open === "string" ? sp.open.trim() : "";
+  if (openParam) returnToParams.set("open", openParam);
+  const returnToQuery = returnToParams.toString();
+  const returnTo = returnToQuery ? `/sold-products?${returnToQuery}` : "/sold-products";
+  const renderReturnToInput = () =>
+    returnToQuery ? <input type="hidden" name="returnTo" value={returnTo} /> : null;
 
   const households =
     q
@@ -116,6 +182,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
     const quantity = Math.max(1, Number(formData.get("quantity") || 1) || 1);
     const useHouseholdId = String(formData.get("existingHouseholdId") || "").trim();
     const nextAction = String(formData.get("nextAction") || "");
+    const returnTo = String(formData.get("returnTo") || "").trim();
     const addAnotherForHousehold = nextAction === "addAnother";
 
     const firstName = String(formData.get("firstName") || "").trim();
@@ -198,6 +265,18 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
 
     revalidatePath("/sold-products");
 
+    if (returnTo) {
+      if (addAnotherForHousehold && householdId) {
+        const url = new URL(returnTo, "http://example.com");
+        const params = new URLSearchParams(url.search);
+        params.set("householdId", householdId);
+        params.set("open", "1");
+        const query = params.toString();
+        redirect(`${url.pathname}${query ? `?${query}` : ""}`);
+      }
+      redirect(returnTo);
+    }
+
     if (addAnotherForHousehold && householdId) {
       redirect(`/sold-products?householdId=${householdId}&open=1`);
     }
@@ -219,6 +298,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
     const policyLastName = String(formData.get("policyLastName") || "").trim();
     const applyToHousehold = formData.get("applyToHousehold") === "on";
     const markIssued = intent === "issue";
+    const returnTo = String(formData.get("returnTo") || "").trim();
 
     if (!soldProductId || !dateSoldStr || !premiumStr || !policyFirstName || !policyLastName) return;
 
@@ -260,16 +340,23 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
     await prisma.$transaction(actions);
 
     revalidatePath("/sold-products");
+    if (returnTo) {
+      redirect(returnTo);
+    }
   }
 
   async function deleteSoldProduct(formData: FormData) {
     "use server";
 
     const soldProductId = String(formData.get("soldProductId") || "");
+    const returnTo = String(formData.get("returnTo") || "").trim();
     if (!soldProductId) return;
 
     await prisma.soldProduct.delete({ where: { id: soldProductId } });
     revalidatePath("/sold-products");
+    if (returnTo) {
+      redirect(returnTo);
+    }
   }
 
   async function updateHousehold(formData: FormData) {
@@ -277,9 +364,13 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
     const householdId = String(formData.get("householdId") || "");
     const firstName = String(formData.get("hhFirstName") || "").trim();
     const lastName = String(formData.get("hhLastName") || "").trim();
+    const returnTo = String(formData.get("returnTo") || "").trim();
     if (!householdId || !firstName || !lastName) return;
     await prisma.household.update({ where: { id: householdId }, data: { firstName, lastName } });
     revalidatePath("/sold-products");
+    if (returnTo) {
+      redirect(returnTo);
+    }
   }
 
   async function updatePolicyQuick(formData: FormData) {
@@ -289,6 +380,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
     const premiumStr = String(formData.get("quickPremium") || "");
     const status = String(formData.get("quickStatus") || PolicyStatus.WRITTEN);
     const dateSoldStr = String(formData.get("quickDate") || "");
+    const returnTo = String(formData.get("returnTo") || "").trim();
     if (!soldProductId || !productId || !premiumStr || !dateSoldStr) return;
     const premium = Number(premiumStr);
     if (Number.isNaN(premium)) return;
@@ -298,18 +390,25 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
       data: { productId, premium, status: status as PolicyStatus, dateSold },
     });
     revalidatePath("/sold-products");
+    if (returnTo) {
+      redirect(returnTo);
+    }
   }
 
   async function updateStatusQuick(formData: FormData) {
     "use server";
     const soldProductId = String(formData.get("soldProductId") || "");
     const status = String(formData.get("status") || PolicyStatus.WRITTEN);
+    const returnTo = String(formData.get("returnTo") || "").trim();
     if (!soldProductId) return;
     await prisma.soldProduct.update({
       where: { id: soldProductId },
       data: { status: status as PolicyStatus },
     });
     revalidatePath("/sold-products");
+    if (returnTo) {
+      redirect(returnTo);
+    }
   }
 
   const lobWhere: any = {};
@@ -435,27 +534,18 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
           style={{
             display: "grid",
             gap: 10,
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             alignItems: "center",
           }}
         >
           <div style={{ display: "grid", gap: 6 }}>
             <span style={{ fontSize: 13, color: "#6b7280" }}>Date range</span>
-            <DateRangePicker
-              preset="custom"
-              baseDate={startDateStr}
+            <DatePicker1RangeClient
               start={startDateStr}
               end={endDateStr}
-              query={{
-                start: startDateStr,
-                end: endDateStr,
-                agencyId: selectedAgencyIds.length ? selectedAgencyIds.join(",") : undefined,
-                status: statusFilter.length ? statusFilter.join(",") : undefined,
-                personId: personFilter || undefined,
-                lobId: selectedLobIds.length ? selectedLobIds.join(",") : undefined,
-                open: sp.open,
-                householdId: sp.householdId,
-              }}
+              label=""
+              quickPresets={false}
+              presets={datePresets}
             />
             <div style={{ fontSize: 11, color: "#9ca3af" }}>Pick start then end; range applies instantly.</div>
           </div>
@@ -541,32 +631,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
             </details>
           </div>
           <div style={{ alignSelf: "end", display: "flex", gap: 8 }}>
-            <button
-              type="submit"
-              style={{
-                padding: "10px 14px",
-                borderRadius: 8,
-                border: "1px solid #2563eb",
-                background: "#2563eb",
-                color: "#fff",
-                fontWeight: 700,
-              }}
-            >
-              Apply Filters
-            </button>
-            <Link
-              href="/sold-products"
-              style={{
-                padding: "10px 12px",
-                borderRadius: 8,
-                border: "1px solid #d1d5db",
-                background: "#fff",
-                color: "#111",
-                textDecoration: "none",
-              }}
-            >
-              Reset
-            </Link>
+            <ResetFiltersButton start={thisMonthStartStr} end={todayStr} clearKeys={resetClearKeys} />
           </div>
         </form>
         <AutoSubmit
@@ -585,6 +650,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
         searchLast={""}
         openByDefault={openByDefault}
         selectedAgencyId={selectedAgencyIds[0] || ""}
+        returnTo={returnTo}
         onSubmit={createSoldProduct}
       />
 
@@ -681,6 +747,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
                   <div style={{ padding: "8px 16px", display: "flex", justifyContent: "flex-end" }}>
                     <form action={updateHousehold} style={{ display: "flex", gap: 8 }}>
                       <input type="hidden" name="householdId" value={hh.id} />
+                      {renderReturnToInput()}
                       <input name="hhFirstName" defaultValue={hh.firstName} style={{ padding: 8, borderRadius: 8, border: "1px solid #d1d5db" }} />
                       <input name="hhLastName" defaultValue={hh.lastName} style={{ padding: 8, borderRadius: 8, border: "1px solid #d1d5db" }} />
                       <button
@@ -760,6 +827,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
                       <div style={{ textAlign: "right", display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
                         <form action={updateStatusQuick} style={{ display: "flex", gap: 4, alignItems: "center" }}>
                           <input type="hidden" name="soldProductId" value={r.id} />
+                          {renderReturnToInput()}
                           <button
                             type="submit"
                             name="status"
@@ -817,6 +885,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
                           <summary style={{ cursor: "pointer", fontSize: 13, color: "#2563eb" }}>Edit</summary>
                           <form action={updatePolicyQuick} style={{ display: "grid", gap: 6, marginTop: 8, minWidth: 240 }}>
                             <input type="hidden" name="soldProductId" value={r.id} />
+                            {renderReturnToInput()}
                             <label style={{ fontSize: 12, color: "#6b7280" }}>
                               Product
                               <select name="quickProductId" defaultValue={r.productId} style={{ padding: 8, width: "100%", borderRadius: 8, border: "1px solid #d1d5db" }}>
@@ -866,6 +935,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
                         </details>
                         <form action={updateSoldProduct}>
                           <input type="hidden" name="soldProductId" value={r.id} />
+                          {renderReturnToInput()}
                           <input type="hidden" name="policyFirstName" value={r.policyFirstName || r.household.firstName} />
                           <input type="hidden" name="policyLastName" value={r.policyLastName || r.household.lastName} />
                           <input type="hidden" name="dateSold" value={r.dateSold.toISOString().slice(0, 10)} />
@@ -882,6 +952,7 @@ export default async function SoldProductsPage({ searchParams }: { searchParams?
                         </form>
                         <form action={deleteSoldProduct}>
                           <input type="hidden" name="soldProductId" value={r.id} />
+                          {renderReturnToInput()}
                           <button
                             type="submit"
                             style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #f5c2c2", background: "#fce8e8", color: "#b91c1c" }}

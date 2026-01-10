@@ -589,6 +589,7 @@ model CompPlanScorecardTier {
   name                  String
   orderIndex            Int                          @default(0)
   requiresAllConditions Boolean                      @default(true)
+  conditionGroups       CompPlanScorecardConditionGroup[]
   conditions            CompPlanScorecardCondition[]
   rewards               CompPlanScorecardReward[]
   bonusModule           CompPlanBonusModule          @relation(fields: [bonusModuleId], references: [id])
@@ -596,9 +597,22 @@ model CompPlanScorecardTier {
   @@index([bonusModuleId])
 }
 
+model CompPlanScorecardConditionGroup {
+  id         String                       @id @default(cuid())
+  tierId     String
+  name       String                       @default("")
+  mode       CompScorecardConditionGroupMode
+  orderIndex Int                          @default(0)
+  tier       CompPlanScorecardTier        @relation(fields: [tierId], references: [id])
+  conditions CompPlanScorecardCondition[]
+
+  @@index([tierId])
+}
+
 model CompPlanScorecardCondition {
   id             String                @id @default(cuid())
   tierId         String
+  groupId        String?
   metricSource   CompMetricSource
   bucketId       String?
   activityTypeId String?
@@ -606,9 +620,12 @@ model CompPlanScorecardCondition {
   value          Float
   statusFilter   PolicyStatus?
   timeframe      String?
+  filters        Json?
   tier           CompPlanScorecardTier @relation(fields: [tierId], references: [id])
+  group          CompPlanScorecardConditionGroup? @relation(fields: [groupId], references: [id])
 
   @@index([tierId])
+  @@index([groupId])
 }
 
 model CompPlanScorecardReward {
@@ -786,6 +803,8 @@ model BenchRoleExpectation {
   premiumMode           PremiumTargetMode
   premiumByLob          Json?
   premiumByBucket       Json?
+  appGoalsByLobJson     Json?
+  activityTargetsByTypeJson Json?
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
   role                  Role               @relation(fields: [roleId], references: [id])
@@ -799,6 +818,8 @@ model BenchPersonOverride {
   premiumModeOverride     PremiumTargetMode?
   premiumByLobOverride    Json?
   premiumByBucketOverride Json?
+  appGoalsByLobOverrideJson Json?
+  activityTargetsByTypeOverrideJson Json?
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt
   person                  Person             @relation(fields: [personId], references: [id])
@@ -892,6 +913,7 @@ enum CompMetricSource {
   WTD
   APPS_COUNT
   PREMIUM_CATEGORY
+  TOTAL_PREMIUM
 }
 
 enum CompRewardType {
@@ -906,6 +928,11 @@ enum ConditionOperator {
   LTE
   LT
   EQ
+}
+
+enum CompScorecardConditionGroupMode {
+  ALL
+  ANY
 }
 
 enum CompAssignmentScope {

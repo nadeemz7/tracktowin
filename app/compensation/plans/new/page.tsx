@@ -1,6 +1,6 @@
 import { AppShell } from "@/app/components/AppShell";
 import { prisma } from "@/lib/prisma";
-import { PolicyStatus } from "@prisma/client";
+import { CompPlanStatus, PolicyStatus } from "@prisma/client";
 import { redirect } from "next/navigation";
 
 const PRESET_OPTIONS = [
@@ -35,6 +35,9 @@ export default async function NewCompPlanPage() {
         agencyId: agencyId || null,
         name,
         description,
+        status: CompPlanStatus.DRAFT,
+        active: false,
+        archivedAt: null,
         defaultStatusEligibility: statusValues.length ? statusValues : [PolicyStatus.ISSUED, PolicyStatus.PAID],
         effectiveStartMonth: effectiveStartMonth || null,
         versions: {
@@ -47,10 +50,12 @@ export default async function NewCompPlanPage() {
 
     // Optionally seed presets (only two allowed)
     if (preset === "sales" || preset === "scorecard") {
-      const version = await prisma.compPlanVersion.findFirst({ where: { planId: plan.id, isCurrent: true } });
+      const version = await prisma.compPlanVersion.findFirst({
+        where: { planId: plan.id, isCurrent: true },
+      });
       if (version) {
         if (preset === "sales") {
-          await seedSalesPreset(version.id);
+          await seedSalesPreset(version.id, plan.agencyId);
         } else {
           await seedScorecardPreset(version.id);
         }
@@ -102,13 +107,19 @@ export default async function NewCompPlanPage() {
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Default eligible statuses</div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {statuses.map((s) => (
-                <label key={s} style={{ display: "inline-flex", gap: 6, alignItems: "center", padding: "6px 10px", borderRadius: 10, background: "#fff", border: "1px solid #e5e7eb" }}>
-                  <input
-                    type="checkbox"
-                    name="statusEligibility"
-                    value={s}
-                    defaultChecked={s === PolicyStatus.ISSUED || s === PolicyStatus.PAID}
-                  />
+                <label
+                  key={s}
+                  style={{
+                    display: "inline-flex",
+                    gap: 6,
+                    alignItems: "center",
+                    padding: "6px 10px",
+                    borderRadius: 10,
+                    background: "#fff",
+                    border: "1px solid #e5e7eb",
+                  }}
+                >
+                  <input type="checkbox" name="statusEligibility" value={s} defaultChecked={s === PolicyStatus.ISSUED || s === PolicyStatus.PAID} />
                   {s}
                 </label>
               ))}
@@ -122,7 +133,18 @@ export default async function NewCompPlanPage() {
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Choose starting approach</div>
             <div style={{ display: "grid", gap: 8 }}>
               {PRESET_OPTIONS.map((opt) => (
-                <label key={opt.value} style={{ display: "inline-flex", gap: 8, alignItems: "center", padding: "8px 10px", borderRadius: 10, border: "1px solid #e5e7eb", background: "#f8fafc" }}>
+                <label
+                  key={opt.value}
+                  style={{
+                    display: "inline-flex",
+                    gap: 8,
+                    alignItems: "center",
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    border: "1px solid #e5e7eb",
+                    background: "#f8fafc",
+                  }}
+                >
                   <input type="radio" name="preset" value={opt.value} defaultChecked={opt.value === "scratch"} />
                   <span style={{ fontWeight: 600 }}>{opt.label}</span>
                 </label>
@@ -133,11 +155,7 @@ export default async function NewCompPlanPage() {
             </div>
           </div>
 
-          <button
-            type="submit"
-            className="btn primary"
-            style={{ padding: "12px 16px", borderRadius: 10, width: "100%", fontWeight: 800, fontSize: 16 }}
-          >
+          <button type="submit" className="btn primary" style={{ padding: "12px 16px", borderRadius: 10, width: "100%", fontWeight: 800, fontSize: 16 }}>
             Confirm & Create
           </button>
         </form>
@@ -146,38 +164,64 @@ export default async function NewCompPlanPage() {
   );
 }
 
-async function seedSalesPreset(planVersionId: string) {
-  await prisma.compPlanRuleBlock.createMany({
-    data: [
-      {
-        planVersionId,
-        name: "Auto Personal Raw New (tiered)",
-        enabled: true,
-        orderIndex: 0,
-        ruleType: "BASE",
-        statusEligibilityOverride: [],
-        applyScope: "PRODUCT",
-        applyFilters: { productType: "PERSONAL", productNames: ["Auto Raw New"] },
-        payoutType: "FLAT_PER_APP",
-        basePayoutValue: 10,
-        tierMode: "TIERS",
-        tierBasis: "APP_COUNT",
-      },
-      {
-        planVersionId,
-        name: "Auto Added",
-        enabled: true,
-        orderIndex: 1,
-        ruleType: "BASE",
-        statusEligibilityOverride: [],
-        applyScope: "PRODUCT",
-        applyFilters: { productType: "PERSONAL", productNames: ["Auto Added"] },
-        payoutType: "FLAT_PER_APP",
-        basePayoutValue: 5,
-        tierMode: "NONE",
-      },
-    ],
+async function seedSalesPreset(planVersionId: string, agencyId: string | null) {
+  if (!agencyId) return;
+
+  const products = await prisma.product.findMany({
+    where: {
+      name: { in: ["Auto Raw New", "Auto Added"] },
+      lineOfBusiness: { agencyId },
+    },
+    include: { lineOfBusiness: true },
   });
+
+  const productsByName = products.reduce<Record<string, string[]>>((acc, product) => {
+    if (!acc[product.name]) acc[product.name] = [];
+    acc[product.name].push(product.id);
+    return acc;
+  }, {});
+
+  const autoRawNewIds = productsByName["Auto Raw New"] || [];
+  const autoAddedIds = productsByName["Auto Added"] || [];
+
+  const data: Parameters<typeof prisma.compPlanRuleBlock.createMany>[0]["data"] = [];
+
+  if (autoRawNewIds.length) {
+    data.push({
+      planVersionId,
+      name: "Auto Personal Raw New (tiered)",
+      enabled: true,
+      orderIndex: 0,
+      ruleType: "BASE" as any,
+      statusEligibilityOverride: [],
+      applyScope: "PRODUCT" as any,
+      applyFilters: { productIds: autoRawNewIds } as any,
+      payoutType: "FLAT_PER_APP" as any,
+      basePayoutValue: 10,
+      tierMode: "TIERS" as any,
+      tierBasis: "APP_COUNT" as any,
+    });
+  }
+
+  if (autoAddedIds.length) {
+    data.push({
+      planVersionId,
+      name: "Auto Added",
+      enabled: true,
+      orderIndex: 1,
+      ruleType: "BASE" as any,
+      statusEligibilityOverride: [],
+      applyScope: "PRODUCT" as any,
+      applyFilters: { productIds: autoAddedIds } as any,
+      payoutType: "FLAT_PER_APP" as any,
+      basePayoutValue: 5,
+      tierMode: "NONE" as any,
+    });
+  }
+
+  if (!data.length) return;
+
+  await prisma.compPlanRuleBlock.createMany({ data });
 }
 
 async function seedScorecardPreset(planVersionId: string) {
@@ -185,10 +229,11 @@ async function seedScorecardPreset(planVersionId: string) {
     data: {
       planVersionId,
       name: "Scorecard (Bronze/Silver/Gold)",
-      bonusType: "SCORECARD_TIER",
+      bonusType: "SCORECARD_TIER" as any,
       highestTierWins: true,
     },
   });
+
   await prisma.compPlanScorecardTier.createMany({
     data: [
       { bonusModuleId: bonus.id, name: "Bronze", orderIndex: 0 },

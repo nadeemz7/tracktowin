@@ -37,6 +37,8 @@ type Metrics = {
   bucketValues: { pc: number; fs: number; ips: number; total: number };
 };
 
+type BucketById = Record<string, { includesProducts: string[]; includesLobs: string[] }>;
+
 async function resolvePlanForPerson(
   person: { id: string; roleId: string | null; teamId: string | null; teamType: any; primaryAgencyId: string | null },
   monthKey: string
@@ -135,36 +137,128 @@ type BonusCard = {
   remaining?: string;
 };
 
-function evaluateBonuses(plan: ResolvedPlan, metrics: Metrics) {
+function evaluateBonuses(
+  plan: ResolvedPlan,
+  metrics: Metrics,
+  bucketTotalsById: Record<string, number>,
+  activityByTypeIdMonth: Record<string, number>,
+  activityByNameMonth: Record<string, number>,
+  activityByTypeIdDay: Record<string, Record<string, number>>,
+  activityByNameDay: Record<string, Record<string, number>>
+) {
   const cards: BonusCard[] = [];
   let bonusTotal = 0;
 
   for (const bm of plan.bonusModules) {
     if (bm.bonusType === CompBonusType.ACTIVITY_BONUS) {
       const cfg = (bm.config || {}) as any;
-      const count = cfg.activityTypeId ? metrics.activityByTypeId[cfg.activityTypeId] || 0 : 0;
-      const needed = cfg.threshold || 0;
-      const payout = cfg.payoutValue || 0;
-      const achieved = count >= needed;
-      const amount = achieved ? (cfg.payoutType === "PER_UNIT" ? payout * count : payout) : 0;
+      const requirements = Array.isArray(cfg.requirements) ? cfg.requirements : null;
+      if (!requirements || requirements.length === 0) {
+        const count = cfg.activityTypeId ? activityByTypeIdMonth[cfg.activityTypeId] || 0 : 0;
+        const needed = cfg.threshold || 0;
+        const payout = cfg.payoutValue || 0;
+        const achieved = count >= needed;
+        const amount = achieved ? (cfg.payoutType === "PER_UNIT" ? payout * count : payout) : 0;
+        bonusTotal += amount;
+        cards.push({
+          title: bm.name || "Activity bonus",
+          summary: `Activity: ${cfg.activityTypeName || cfg.activityTypeId || "Unspecified"} — ${count}/${needed}`,
+          amount,
+          potential: amount,
+          detail: achieved ? "Achieved" : "Not yet achieved",
+          achieved,
+          conditions: [
+            {
+              label: cfg.activityTypeName || cfg.activityTypeId || "Activity",
+              value: count,
+              target: needed,
+              progress: needed > 0 ? Math.min(100, Math.round((count / needed) * 100)) : 0,
+              met: achieved,
+            },
+          ],
+          remaining: achieved ? undefined : `${Math.max(0, needed - count)} more to unlock`,
+        });
+        continue;
+      }
+
+      const timeframe = cfg.timeframe === "DAY" ? "DAY" : "MONTH";
+      const requiresAll = cfg.requiresAll !== undefined ? Boolean(cfg.requiresAll) : true;
+      const payoutType = cfg.payoutType === "PER_UNIT" ? "PER_UNIT" : "FLAT";
+      const payoutValue = cfg.payoutValue || 0;
+      const normalizedReqs = requirements.map((req: any) => ({
+        activityTypeId: req.activityTypeId,
+        activityName: req.activityName,
+        min: Number(req.min || 0),
+      }));
+
+      const requirementValue = (req: any, byType: Record<string, number>, byName: Record<string, number>) => {
+        if (req.activityTypeId) return byType[req.activityTypeId] || 0;
+        if (req.activityName) return byName[req.activityName] || 0;
+        return 0;
+      };
+
+      const buildResult = (byType: Record<string, number>, byName: Record<string, number>) => {
+        const conditions = normalizedReqs.map((req: any) => {
+          const value = requirementValue(req, byType, byName);
+          const target = req.min || 0;
+          const progress = target > 0 ? Math.min(100, Math.round((value / target) * 100)) : 0;
+          const met = value >= target;
+          return { label: req.activityName || req.activityTypeId || "Activity", value, target, progress, met };
+        });
+        const metCount = conditions.filter((c) => c.met).length;
+        const sum = conditions.reduce((acc, c) => acc + c.value, 0);
+        const remaining = conditions.map((c) => Math.max(0, c.target - c.value));
+        const remainingMax = remaining.length ? Math.max(...remaining) : 0;
+        const remainingMin = remaining.length ? Math.min(...remaining) : 0;
+        const achieved = requiresAll ? conditions.every((c) => c.met) : conditions.some((c) => c.met);
+        return { conditions, metCount, sum, remainingMax, remainingMin, achieved };
+      };
+
+      let winningResult: ReturnType<typeof buildResult> | null = null;
+      let progressResult: ReturnType<typeof buildResult> | null = null;
+
+      if (timeframe === "MONTH") {
+        const result = buildResult(activityByTypeIdMonth, activityByNameMonth);
+        winningResult = result;
+        progressResult = result;
+      } else {
+        const dayKeys = new Set([...Object.keys(activityByTypeIdDay), ...Object.keys(activityByNameDay)]);
+        progressResult = buildResult({}, {});
+        for (const dayKey of Array.from(dayKeys).sort()) {
+          const result = buildResult(activityByTypeIdDay[dayKey] || {}, activityByNameDay[dayKey] || {});
+          if (result.achieved && (!winningResult || result.sum > winningResult.sum)) {
+            winningResult = result;
+          }
+          if (
+            !progressResult ||
+            result.metCount > progressResult.metCount ||
+            (result.metCount === progressResult.metCount &&
+              ((requiresAll ? result.remainingMax < progressResult.remainingMax : result.remainingMin < progressResult.remainingMin) ||
+                ((requiresAll ? result.remainingMax === progressResult.remainingMax : result.remainingMin === progressResult.remainingMin) && result.sum > progressResult.sum)))
+          ) {
+            progressResult = result;
+          }
+        }
+      }
+
+      const achieved = Boolean(winningResult && winningResult.achieved);
+      const displayResult = achieved && winningResult ? winningResult : progressResult;
+      const amount = achieved ? (payoutType === "PER_UNIT" ? payoutValue * (winningResult ? winningResult.sum : 0) : payoutValue) : 0;
       bonusTotal += amount;
+
+      const remainingNeeded = displayResult ? (requiresAll ? displayResult.remainingMax : displayResult.remainingMin) : 0;
+      const metCount = displayResult ? displayResult.metCount : 0;
+      const conditions = displayResult ? displayResult.conditions : [];
+
       cards.push({
         title: bm.name || "Activity bonus",
-        summary: `Activity: ${cfg.activityTypeName || cfg.activityTypeId || "Unspecified"} — ${count}/${needed}`,
+        summary: `Grouped activity bonus — ${timeframe} — met ${metCount}/${normalizedReqs.length} requirements`,
         amount,
         potential: amount,
         detail: achieved ? "Achieved" : "Not yet achieved",
         achieved,
-        conditions: [
-          {
-            label: cfg.activityTypeName || cfg.activityTypeId || "Activity",
-            value: count,
-            target: needed,
-            progress: needed > 0 ? Math.min(100, Math.round((count / needed) * 100)) : 0,
-            met: achieved,
-          },
-        ],
-        remaining: achieved ? undefined : `${Math.max(0, needed - count)} more to unlock`,
+        conditions,
+        remaining: achieved ? undefined : `${Math.max(0, remainingNeeded)} more to unlock`,
       });
       continue;
     }
@@ -179,6 +273,7 @@ function evaluateBonuses(plan: ResolvedPlan, metrics: Metrics) {
         return c.premiumCategory === PremiumCategory.PC ? metrics.pcPremium : c.premiumCategory === PremiumCategory.FS ? metrics.fsPremium : metrics.ipsPremium;
       }
       if (c.metricSource === CompMetricSource.BUCKET) {
+        if (c.bucketId) return bucketTotalsById[c.bucketId] || 0;
         return c.premiumCategory === PremiumCategory.PC
           ? metrics.bucketValues.pc
           : c.premiumCategory === PremiumCategory.FS
@@ -218,15 +313,14 @@ function evaluateBonuses(plan: ResolvedPlan, metrics: Metrics) {
         if (r.rewardType === CompRewardType.ADD_FLAT_DOLLARS && r.dollarValue) {
           sum += r.dollarValue;
         } else if (r.rewardType === CompRewardType.ADD_PERCENT_OF_BUCKET) {
-          const base =
-            r.premiumCategory === PremiumCategory.PC
+          const base = r.bucketId
+            ? (bucketTotalsById[r.bucketId] || 0)
+            : r.premiumCategory === PremiumCategory.PC
               ? metrics.bucketValues.pc
               : r.premiumCategory === PremiumCategory.FS
               ? metrics.bucketValues.fs
-              : r.premiumCategory === PremiumCategory.IPS
-              ? metrics.bucketValues.ips
               : metrics.bucketValues.total;
-          sum += base * (r.percentValue || 0);
+          sum += base * ((r.percentValue || 0) / 100);
         }
       }
       return sum;
@@ -362,7 +456,7 @@ function passesStatus(statusList: PolicyStatus[], override?: PolicyStatus[]) {
   return statusList.some((s) => override.includes(s));
 }
 
-function matchesScope(rule: any, rows: typeof sampleSold): typeof sampleSold {
+function matchesScope(rule: any, rows: typeof sampleSold, bucketById: BucketById): typeof sampleSold {
   const filters = (rule.applyFilters || {}) as any;
   switch (rule.applyScope) {
     case CompApplyScope.PRODUCT:
@@ -373,6 +467,13 @@ function matchesScope(rule: any, rows: typeof sampleSold): typeof sampleSold {
       return rows.filter((r) => (filters.productTypes || []).includes(r.product.productType));
     case CompApplyScope.PREMIUM_CATEGORY:
       return rows.filter((r) => (filters.premiumCategories || []).includes(r.product.lineOfBusiness.premiumCategory));
+    case CompApplyScope.BUCKET: {
+      const bucket = rule.bucketId ? bucketById[rule.bucketId] : null;
+      if (!bucket) return [];
+      return rows.filter(
+        (r) => bucket.includesProducts.includes(r.product.name) || bucket.includesLobs.includes(r.product.lineOfBusiness.name)
+      );
+    }
     default:
       return rows;
   }
@@ -382,13 +483,15 @@ function evaluateRuleBlocks(
   plan: ResolvedPlan | null,
   soldRows: typeof sampleSold,
   statusFilter: PolicyStatus[],
-  bucketValues: Metrics["bucketValues"]
+  bucketValues: Metrics["bucketValues"],
+  bucketTotalsById: Record<string, number>,
+  bucketById: BucketById
 ): RuleEvalResult[] {
   if (!plan) return [];
   const results: RuleEvalResult[] = [];
 
   for (const rule of plan.ruleBlocks) {
-    const scopedRows = matchesScope(rule, soldRows).filter((r) => passesStatus([r.status as PolicyStatus], rule.statusEligibilityOverride));
+    const scopedRows = matchesScope(rule, soldRows, bucketById).filter((r) => passesStatus([r.status as PolicyStatus], rule.statusEligibilityOverride));
     if (scopedRows.length === 0) continue;
 
     const appsCount = scopedRows.length;
@@ -404,11 +507,7 @@ function evaluateRuleBlocks(
       rule.tierBasis === CompTierBasis.PREMIUM_SUM
         ? premiumSum
         : rule.tierBasis === CompTierBasis.BUCKET_VALUE
-        ? (rule.applyFilters as any)?.premiumCategories?.includes(PremiumCategory.FS)
-          ? bucketValues.fs
-          : (rule.applyFilters as any)?.premiumCategories?.includes(PremiumCategory.IPS)
-          ? bucketValues.ips
-          : bucketValues.pc
+        ? (rule.bucketId ? (bucketTotalsById[rule.bucketId] || 0) : 0)
         : appsCount;
     const selectedTier = tiered ? rule.tiers.find((t) => tierBasisVal >= t.minValue && (t.maxValue == null || tierBasisVal <= t.maxValue)) || rule.tiers[rule.tiers.length - 1] : null;
     const payoutValue = selectedTier ? selectedTier.payoutValue : rule.basePayoutValue || 0;
@@ -424,13 +523,13 @@ function evaluateRuleBlocks(
       });
       traceParts.push(`Flat per app ${payoutValue} * ${appsCount} apps`);
     } else if (rule.payoutType === CompPayoutType.PERCENT_OF_PREMIUM) {
-      amount = payoutValue * premiumSum;
+      amount = (payoutValue / 100) * premiumSum;
       const totalPremium = premiumSum || 1;
       scopedRows.forEach((r) => {
         const share = (Number(r.premium || 0) / totalPremium) * amount;
         perProduct.set(r.product.id, (perProduct.get(r.product.id) || 0) + share);
       });
-      traceParts.push(`Percent of premium ${(payoutValue * 100).toFixed(2)}% on ${fmtMoney(premiumSum)}`);
+      traceParts.push(`Percent of premium ${payoutValue.toFixed(2)}% on ${fmtMoney(premiumSum)}`);
     } else if (rule.payoutType === CompPayoutType.FLAT_LUMP_SUM) {
       amount = payoutValue;
       const each = scopedRows.length ? amount / scopedRows.length : 0;
@@ -454,7 +553,7 @@ function evaluateRuleBlocks(
           rule.payoutType === CompPayoutType.FLAT_PER_APP
             ? `${fmtMoney(t.payoutValue)} per app`
             : rule.payoutType === CompPayoutType.PERCENT_OF_PREMIUM
-            ? `${(t.payoutValue * 100).toFixed(2)}%`
+            ? `${t.payoutValue.toFixed(2)}%`
             : fmtMoney(t.payoutValue);
         let leftText: string | undefined;
         if (!achieved) {
@@ -517,6 +616,17 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
 
   const statusFilter = applyWritten ? [PolicyStatus.WRITTEN, PolicyStatus.ISSUED, PolicyStatus.PAID] : [PolicyStatus.ISSUED, PolicyStatus.PAID];
 
+  let bucketAgencyId = selectedPerson?.primaryAgencyId || null;
+  if (!bucketAgencyId && selectedPerson?.teamId) {
+    const team = await prisma.team.findUnique({ where: { id: selectedPerson.teamId }, select: { agencyId: true } });
+    bucketAgencyId = team?.agencyId || null;
+  }
+  const premiumBuckets = bucketAgencyId ? await prisma.premiumBucket.findMany({ where: { agencyId: bucketAgencyId } }) : [];
+  const bucketById = premiumBuckets.reduce((acc, bucket) => {
+    acc[bucket.id] = bucket;
+    return acc;
+  }, {} as BucketById);
+
   const sold = selectedPerson
     ? await prisma.soldProduct.findMany({
         where: {
@@ -536,6 +646,39 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
         },
       })
     : [];
+
+  const activityByTypeIdMonth = activities.reduce<Record<string, number>>((acc, a) => {
+    if (a.activityTypeId) acc[a.activityTypeId] = (acc[a.activityTypeId] || 0) + a.count;
+    return acc;
+  }, {});
+  const activityByNameMonth = activities.reduce<Record<string, number>>((acc, a) => {
+    acc[a.activityName] = (acc[a.activityName] || 0) + a.count;
+    return acc;
+  }, {});
+  const activityByTypeIdDay = activities.reduce<Record<string, Record<string, number>>>((acc, a) => {
+    if (!a.activityTypeId) return acc;
+    const dayKey = a.activityDate.toISOString().slice(0, 10);
+    if (!acc[dayKey]) acc[dayKey] = {};
+    acc[dayKey][a.activityTypeId] = (acc[dayKey][a.activityTypeId] || 0) + a.count;
+    return acc;
+  }, {});
+  const activityByNameDay = activities.reduce<Record<string, Record<string, number>>>((acc, a) => {
+    const dayKey = a.activityDate.toISOString().slice(0, 10);
+    if (!acc[dayKey]) acc[dayKey] = {};
+    acc[dayKey][a.activityName] = (acc[dayKey][a.activityName] || 0) + a.count;
+    return acc;
+  }, {});
+
+  const bucketTotalsById = premiumBuckets.reduce((acc, bucket) => {
+    const total = sold.reduce((sum, r) => {
+      if (bucket.includesProducts.includes(r.product.name) || bucket.includesLobs.includes(r.product.lineOfBusiness.name)) {
+        return sum + Number(r.premium || 0);
+      }
+      return sum;
+    }, 0);
+    acc[bucket.id] = total;
+    return acc;
+  }, {} as Record<string, number>);
 
   const groupedProducts = new Map<
     string,
@@ -563,14 +706,8 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
       .filter((r) => r.product.lineOfBusiness.premiumCategory === PremiumCategory.IPS)
       .reduce((s, r) => s + Number(r.premium || 0), 0),
     totalApps: sold.length,
-    activityByName: activities.reduce<Record<string, number>>((acc, a) => {
-      acc[a.activityName] = (acc[a.activityName] || 0) + a.count;
-      return acc;
-    }, {}),
-    activityByTypeId: activities.reduce<Record<string, number>>((acc, a) => {
-      if (a.activityTypeId) acc[a.activityTypeId] = (acc[a.activityTypeId] || 0) + a.count;
-      return acc;
-    }, {}),
+    activityByName: activityByNameMonth,
+    activityByTypeId: activityByTypeIdMonth,
     bucketValues: {
       pc: pcPremium,
       fs: fsPremium,
@@ -589,10 +726,20 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
     ? await resolvePlanForPerson(selectedPerson, monthKey)
     : null;
 
-  const bonusResult = resolvedPlan ? evaluateBonuses(resolvedPlan, metrics) : { bonusTotal: 0, cards: [] };
+  const bonusResult = resolvedPlan
+    ? evaluateBonuses(
+        resolvedPlan,
+        metrics,
+        bucketTotalsById,
+        activityByTypeIdMonth,
+        activityByNameMonth,
+        activityByTypeIdDay,
+        activityByNameDay
+      )
+    : { bonusTotal: 0, cards: [] };
 
   const gateStatus = evaluateGates(resolvedPlan, sold, statusFilter);
-  const ruleResults = gateStatus.blocked ? [] : evaluateRuleBlocks(resolvedPlan, sold, statusFilter, metrics.bucketValues);
+  const ruleResults = gateStatus.blocked ? [] : evaluateRuleBlocks(resolvedPlan, sold, statusFilter, metrics.bucketValues, bucketTotalsById, bucketById);
   const commissionSum = ruleResults.reduce((s, r) => s + r.amount, 0);
   const activitySum = 0;
   const bonusSum = gateStatus.blocked ? 0 : bonusResult.bonusTotal;

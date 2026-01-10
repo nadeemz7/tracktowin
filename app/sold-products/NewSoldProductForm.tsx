@@ -22,7 +22,13 @@ type AgencyWithProducts = {
   }[];
 };
 
-type Person = { id: string; fullName: string; teamType: TeamType; active: boolean };
+type Person = {
+  id: string;
+  fullName: string;
+  teamType: TeamType;
+  active: boolean;
+  primaryAgencyId?: string | null;
+};
 
 type HouseholdOption = {
   id: string;
@@ -44,6 +50,7 @@ type Props = {
   searchLast: string;
   selectedAgencyId?: string;
   openByDefault?: boolean;
+  returnTo?: string;
   onSubmit: (formData: FormData) => Promise<void>;
 };
 
@@ -58,6 +65,7 @@ export function NewSoldProductForm({
   searchLast,
   selectedAgencyId,
   openByDefault = false,
+  returnTo,
   onSubmit,
 }: Props) {
   const [open, setOpen] = useState(openByDefault);
@@ -75,14 +83,17 @@ export function NewSoldProductForm({
 
   const defaultAgencyId = selectedAgencyId || preselectedHousehold?.agencyId || agencies[0]?.id || "";
   const [agencyId, setAgencyId] = useState(defaultAgencyId);
+  const [agencyTouched, setAgencyTouched] = useState(false);
   const initialLobId = agencies.find((a) => a.id === defaultAgencyId)?.linesOfBusiness[0]?.id || "";
   const [lineOfBusinessId, setLineOfBusinessId] = useState<string>(initialLobId);
+  const [soldByPersonId, setSoldByPersonId] = useState("");
 
   const selectedAgency = agencies.find((a) => a.id === agencyId) || null;
   const linesOfBusiness = selectedAgency?.linesOfBusiness || [];
   const valueDefaults = selectedAgency?.valuePolicyDefaults || [];
   const selectedLob = linesOfBusiness.find((lob) => lob.id === lineOfBusinessId) || null;
   const productsForLob = linesOfBusiness.find((lob) => lob.id === lineOfBusinessId)?.products || [];
+  const returnToValue = returnTo?.trim();
 
   const healthDefault = valueDefaults.find(
     (v) => v.flagField === "isValueHealth" && v.lineOfBusiness === selectedLob?.name && v.active
@@ -105,6 +116,17 @@ export function NewSoldProductForm({
               ? "#f43f5e"
               : "#4338ca",
   }));
+
+  function onSellerChange(nextPersonId: string) {
+    setSoldByPersonId(nextPersonId);
+    if (!nextPersonId || agencyTouched) return;
+    const person = people.find((p) => p.id === nextPersonId);
+    const nextAgency = person?.primaryAgencyId;
+    if (!nextAgency || nextAgency === agencyId) return;
+    setAgencyId(nextAgency);
+    const nextAgencyData = agencies.find((a) => a.id === nextAgency);
+    setLineOfBusinessId(nextAgencyData?.linesOfBusiness[0]?.id || "");
+  }
 
   return (
     <>
@@ -182,6 +204,7 @@ export function NewSoldProductForm({
             <div style={{ marginTop: 16 }}>
               <form action={onSubmit} style={{ display: "grid", gap: 14 }}>
                 <input type="hidden" name="open" value="1" />
+                {returnToValue ? <input type="hidden" name="returnTo" value={returnToValue} /> : null}
 
                 {step === "household" && (
                   <div style={{ display: "grid", gap: 12 }}>
@@ -397,7 +420,8 @@ export function NewSoldProductForm({
                         Team member *
                         <select
                           name="soldByPersonId"
-                          defaultValue=""
+                          value={soldByPersonId}
+                          onChange={(e) => onSellerChange(e.target.value)}
                           style={{ padding: 12, width: "100%", borderRadius: 10, border: "1px solid #d1d5db", marginTop: 4 }}
                         >
                           <option value="">Select team member</option>
@@ -433,6 +457,7 @@ export function NewSoldProductForm({
                           value={agencyId}
                           onChange={(e) => {
                             const next = e.target.value;
+                            setAgencyTouched(true);
                             setAgencyId(next);
                             const nextAgency = agencies.find((a) => a.id === next);
                             setLineOfBusinessId(nextAgency?.linesOfBusiness[0]?.id || "");

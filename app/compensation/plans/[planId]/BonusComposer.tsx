@@ -69,7 +69,7 @@ export default function BonusComposer({
         <label style={{ display: "grid", gap: 4 }}>
           <span>Type</span>
           <div style={{ display: "grid", gap: 6 }}>
-            <select value={type} onChange={(e) => setType(e.target.value as CompBonusType)} className="select">
+            <select name="bonusType" value={type} onChange={(e) => setType(e.target.value as CompBonusType)} className="select">
               <option value={CompBonusType.SCORECARD_TIER}>Scorecard</option>
               <option value={CompBonusType.GOAL_BONUS}>Bonus</option>
               <option value={CompBonusType.CUSTOM}>Custom / Subtractor</option>
@@ -81,227 +81,251 @@ export default function BonusComposer({
         </label>
         <label style={{ display: "grid", gap: 4 }}>
           <span>Name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="input" />
+          <input name="name" value={name} onChange={(e) => setName(e.target.value)} className="input" />
         </label>
       </div>
-
-      <div style={{ marginTop: 12, fontWeight: 700 }}>Conditions</div>
-      <div style={{ display: "grid", gap: 8 }}>
-        {conditions.map((c) => (
-          <div key={c.id} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 6, alignItems: "center" }}>
-            <select
-              className="select"
-              value={c.field}
-              onChange={(e) => setConditions((list) => list.map((row) => (row.id === c.id ? { ...row, field: e.target.value } : row)))}
-            >
-              <option value="apps">Total apps</option>
-              <option value="premium">Total premium</option>
-              <option value="activity">Activity total</option>
-            </select>
-            <select
-              className="select"
-              value={c.op}
-              onChange={(e) => setConditions((list) => list.map((row) => (row.id === c.id ? { ...row, op: e.target.value } : row)))}
-            >
-              <option value=">=">&gt;=</option>
-              <option value="<=">&lt;=</option>
-              <option value="=">=</option>
-            </select>
-            <input
-              className="input"
-              value={c.value}
-              onChange={(e) => setConditions((list) => list.map((row) => (row.id === c.id ? { ...row, value: e.target.value } : row)))}
-              placeholder="Value"
-            />
-            <button className="btn" type="button" onClick={() => removeCondition(c.id)} style={{ padding: "6px 10px" }}>
-              Remove
-            </button>
-          </div>
-        ))}
-        <button className="btn" type="button" onClick={addCondition} style={{ width: "fit-content" }}>
-          + Add condition
-        </button>
-      </div>
-
-      <div style={{ marginTop: 16, fontWeight: 800 }}>Rewards</div>
-      <div style={{ display: "grid", gap: 8 }}>
-        {rewards.map((r) => (
-          <div
-            key={r.id}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-              gap: 8,
-              alignItems: "center",
-              background: "#fff",
-              padding: 8,
-              borderRadius: 10,
-              border: "1px solid #e2e8f0",
-            }}
-          >
-            <select
-              className="select"
-              value={r.type}
-              onChange={(e) =>
-                setRewards((list) =>
-                  list.map((row) =>
-                    row.id === r.id
-                      ? { ...row, type: e.target.value as CompRewardType, percent: "", dollar: "", bucketId: "", premiumCategory: undefined }
-                      : row
-                  )
-                )
-              }
-            >
-              <option value={CompRewardType.ADD_FLAT_DOLLARS}>Flat $</option>
-              <option value={CompRewardType.ADD_PERCENT_OF_BUCKET}>% of bucket</option>
-              <option value={CompRewardType.MULTIPLIER}>Multiplier</option>
-            </select>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569" }}>
-              <input
-                type="checkbox"
-                checked={r.isPenalty || false}
-                onChange={(e) => setRewards((list) => list.map((row) => (row.id === r.id ? { ...row, isPenalty: e.target.checked } : row)))}
-              />
-              Subtractor (penalty)
-            </label>
-
-            {r.type === CompRewardType.ADD_FLAT_DOLLARS ? (
-              <input
-                className="input"
-                type="number"
-                step="0.01"
-                value={r.dollar || ""}
-                placeholder="Amount"
-                onChange={(e) => setRewards((list) => list.map((row) => (row.id === r.id ? { ...row, dollar: e.target.value } : row)))}
-              />
-            ) : (
-              <input
-                className="input"
-                type="number"
-                step="0.01"
-                value={r.percent || ""}
-                placeholder="%"
-                onChange={(e) => setRewards((list) => list.map((row) => (row.id === r.id ? { ...row, percent: e.target.value } : row)))}
-              />
-            )}
-
-            {r.type === CompRewardType.ADD_PERCENT_OF_BUCKET ? (
-              <select
-                className="select"
-                value={r.bucketId}
-                onChange={(e) => setRewards((list) => list.map((row) => (row.id === r.id ? { ...row, bucketId: e.target.value } : row)))}
-              >
-                <option value="">Select bucket</option>
-                {buckets.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <select
-                className="select"
-                value={r.premiumCategory || ""}
-                onChange={(e) =>
-                  setRewards((list) =>
-                    list.map((row) => (row.id === r.id ? { ...row, premiumCategory: (e.target.value as PremiumCategory) || undefined } : row))
-                  )
-                }
-              >
-                <option value="">Any category</option>
-                <option value={PremiumCategory.PC}>PC</option>
-                <option value={PremiumCategory.FS}>FS</option>
-                <option value={PremiumCategory.IPS}>IPS</option>
-              </select>
-            )}
-
-            <button className="btn" type="button" onClick={() => removeReward(r.id)} style={{ padding: "6px 10px" }}>
-              Remove
-            </button>
-          </div>
-        ))}
-        <button className="btn" type="button" onClick={addReward} style={{ width: "fit-content" }}>
-          + Add reward
-        </button>
-      </div>
-
-      <div style={{ marginTop: 16, fontWeight: 800 }}>Products (drag/click to associate)</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      {type === CompBonusType.SCORECARD_TIER ? (
         <div
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            const id = e.dataTransfer.getData("text/plain");
-            if (id && !selectedProducts.includes(id)) setSelectedProducts((s) => [...s, id]);
-          }}
           style={{
-            minHeight: 120,
-            border: "1px dashed #cbd5e1",
-            borderRadius: 12,
-            padding: 10,
+            marginTop: 12,
+            border: "1px solid #e2e8f0",
+            borderRadius: 10,
+            padding: 12,
+            background: "#f8fafc",
+            color: "#0f172a",
             display: "grid",
             gap: 6,
-            background: "#fff",
           }}
         >
-          {selectedProducts.length === 0 ? <div style={{ color: "#94a3b8" }}>Drag or click products to add</div> : null}
-          {selectedProducts.map((pid) => {
-            const p = products.find((p) => p.id === pid);
-            if (!p) return null;
-            return (
-              <div
-                key={pid}
-                style={{
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  background: "#d1fae5",
-                  border: "1px solid #22c55e",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <span>{p.name}</span>
-                <span style={{ fontSize: 12, color: "#0f172a" }}>{p.usage} use(s)</span>
-                <button type="button" className="btn" onClick={() => setSelectedProducts((s) => s.filter((x) => x !== pid))} style={{ padding: "4px 8px" }}>
+          <div style={{ fontWeight: 600 }}>
+            Scorecards are now built in the Scorecard Tier/Group editor below. Use that editor to configure AND/OR groups, scoping (products/LoBs),
+            Activity types, Total Premium, and rewards.
+          </div>
+          <div style={{ fontSize: 12, color: "#475569" }}>
+            This "New Scorecard" builder will be upgraded later. For now, create a Scorecard bonus module, then configure tiers/groups in the section below.
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ marginTop: 12, fontWeight: 700 }}>Conditions</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {conditions.map((c) => (
+              <div key={c.id} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 6, alignItems: "center" }}>
+                <select
+                  className="select"
+                  value={c.field}
+                  onChange={(e) => setConditions((list) => list.map((row) => (row.id === c.id ? { ...row, field: e.target.value } : row)))}
+                >
+                  <option value="apps">Total apps</option>
+                  <option value="premium">Total premium</option>
+                  <option value="activity">Activity total</option>
+                </select>
+                <select
+                  className="select"
+                  value={c.op}
+                  onChange={(e) => setConditions((list) => list.map((row) => (row.id === c.id ? { ...row, op: e.target.value } : row)))}
+                >
+                  <option value=">=">&gt;=</option>
+                  <option value="<=">&lt;=</option>
+                  <option value="=">=</option>
+                </select>
+                <input
+                  className="input"
+                  value={c.value}
+                  onChange={(e) => setConditions((list) => list.map((row) => (row.id === c.id ? { ...row, value: e.target.value } : row)))}
+                  placeholder="Value"
+                />
+                <button className="btn" type="button" onClick={() => removeCondition(c.id)} style={{ padding: "6px 10px" }}>
                   Remove
                 </button>
               </div>
-            );
-          })}
-        </div>
-        <div>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Product list</div>
-          <div style={{ display: "grid", gap: 6, maxHeight: 200, overflowY: "auto" }}>
-            {products.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData("text/plain", p.id)}
-                onClick={() => !selectedProducts.includes(p.id) && setSelectedProducts((s) => [...s, p.id])}
+            ))}
+            <button className="btn" type="button" onClick={addCondition} style={{ width: "fit-content" }}>
+              + Add condition
+            </button>
+          </div>
+
+          <div style={{ marginTop: 16, fontWeight: 800 }}>Rewards</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {rewards.map((r) => (
+              <div
+                key={r.id}
                 style={{
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: "1px solid #e5e7eb",
-                  background: "#f8fafc",
-                  display: "flex",
-                  justifyContent: "space-between",
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                  gap: 8,
                   alignItems: "center",
-                  cursor: "grab",
+                  background: "#fff",
+                  padding: 8,
+                  borderRadius: 10,
+                  border: "1px solid #e2e8f0",
                 }}
               >
-                <span>{p.name}</span>
-                <span style={{ fontSize: 12, color: "#475569" }}>{p.usage} use(s)</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+                <select
+                  className="select"
+                  value={r.type}
+                  onChange={(e) =>
+                    setRewards((list) =>
+                      list.map((row) =>
+                        row.id === r.id
+                          ? { ...row, type: e.target.value as CompRewardType, percent: "", dollar: "", bucketId: "", premiumCategory: undefined }
+                          : row
+                      )
+                    )
+                  }
+                >
+                  <option value={CompRewardType.ADD_FLAT_DOLLARS}>Flat $</option>
+                  <option value={CompRewardType.ADD_PERCENT_OF_BUCKET}>% of bucket</option>
+                  <option value={CompRewardType.MULTIPLIER}>Multiplier</option>
+                </select>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569" }}>
+                  <input
+                    type="checkbox"
+                    checked={r.isPenalty || false}
+                    onChange={(e) => setRewards((list) => list.map((row) => (row.id === r.id ? { ...row, isPenalty: e.target.checked } : row)))}
+                  />
+                  Subtractor (penalty)
+                </label>
 
-      <div style={{ marginTop: 10, fontSize: 13, color: "#0f172a" }}>
-        <strong>Statement:</strong> {summary}
-      </div>
+                {r.type === CompRewardType.ADD_FLAT_DOLLARS ? (
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    value={r.dollar || ""}
+                    placeholder="Amount"
+                    onChange={(e) => setRewards((list) => list.map((row) => (row.id === r.id ? { ...row, dollar: e.target.value } : row)))}
+                  />
+                ) : (
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    value={r.percent || ""}
+                    placeholder="%"
+                    onChange={(e) => setRewards((list) => list.map((row) => (row.id === r.id ? { ...row, percent: e.target.value } : row)))}
+                  />
+                )}
+
+                {r.type === CompRewardType.ADD_PERCENT_OF_BUCKET ? (
+                  <select
+                    className="select"
+                    value={r.bucketId}
+                    onChange={(e) => setRewards((list) => list.map((row) => (row.id === r.id ? { ...row, bucketId: e.target.value } : row)))}
+                  >
+                    <option value="">Select bucket</option>
+                    {buckets.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    className="select"
+                    value={r.premiumCategory || ""}
+                    onChange={(e) =>
+                      setRewards((list) =>
+                        list.map((row) => (row.id === r.id ? { ...row, premiumCategory: (e.target.value as PremiumCategory) || undefined } : row))
+                      )
+                    }
+                  >
+                    <option value="">Any category</option>
+                    <option value={PremiumCategory.PC}>PC</option>
+                    <option value={PremiumCategory.FS}>FS</option>
+                    <option value={PremiumCategory.IPS}>IPS</option>
+                  </select>
+                )}
+
+                <button className="btn" type="button" onClick={() => removeReward(r.id)} style={{ padding: "6px 10px" }}>
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button className="btn" type="button" onClick={addReward} style={{ width: "fit-content" }}>
+              + Add reward
+            </button>
+          </div>
+
+          <div style={{ marginTop: 16, fontWeight: 800 }}>Products (drag/click to associate)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const id = e.dataTransfer.getData("text/plain");
+                if (id && !selectedProducts.includes(id)) setSelectedProducts((s) => [...s, id]);
+              }}
+              style={{
+                minHeight: 120,
+                border: "1px dashed #cbd5e1",
+                borderRadius: 12,
+                padding: 10,
+                display: "grid",
+                gap: 6,
+                background: "#fff",
+              }}
+            >
+              {selectedProducts.length === 0 ? <div style={{ color: "#94a3b8" }}>Drag or click products to add</div> : null}
+              {selectedProducts.map((pid) => {
+                const p = products.find((p) => p.id === pid);
+                if (!p) return null;
+                return (
+                  <div
+                    key={pid}
+                    style={{
+                      padding: "6px 8px",
+                      borderRadius: 8,
+                      background: "#d1fae5",
+                      border: "1px solid #22c55e",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span>{p.name}</span>
+                    <span style={{ fontSize: 12, color: "#0f172a" }}>{p.usage} use(s)</span>
+                    <button type="button" className="btn" onClick={() => setSelectedProducts((s) => s.filter((x) => x !== pid))} style={{ padding: "4px 8px" }}>
+                      Remove
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Product list</div>
+              <div style={{ display: "grid", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+                {products.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData("text/plain", p.id)}
+                    onClick={() => !selectedProducts.includes(p.id) && setSelectedProducts((s) => [...s, p.id])}
+                    style={{
+                      padding: "6px 8px",
+                      borderRadius: 8,
+                      border: "1px solid #e5e7eb",
+                      background: "#f8fafc",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      cursor: "grab",
+                    }}
+                  >
+                    <span>{p.name}</span>
+                    <span style={{ fontSize: 12, color: "#475569" }}>{p.usage} use(s)</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 13, color: "#0f172a" }}>
+            <strong>Statement:</strong> {summary}
+          </div>
+        </>
+      )}
     </div>
   );
 }

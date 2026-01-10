@@ -2,7 +2,7 @@ import { AppShell } from "@/app/components/AppShell";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
-import { CompPlanStatus } from "@prisma/client";
+import { CompAssignmentScope, CompPlanStatus } from "@prisma/client";
 import AssignDragBoard from "./AssignDragBoard";
 
 export default async function CompPlansPage() {
@@ -10,9 +10,9 @@ export default async function CompPlansPage() {
   const activeAgency = agencies[0] || null;
 
   const plans = await prisma.compPlan.findMany({
-    where: activeAgency ? { agencyId: activeAgency.id, status: { not: CompPlanStatus.ARCHIVED } } : { status: { not: CompPlanStatus.ARCHIVED } },
-    orderBy: { updatedAt: "desc" },
-    include: { assignments: true, versions: { where: { isCurrent: true } } },
+    where: { archivedAt: null },
+    orderBy: [{ active: "desc" }, { updatedAt: "desc" }],
+    include: { assignments: true, versions: { where: { isCurrent: true } }, agency: { select: { id: true, name: true } } },
   });
 
   const people = await prisma.person.findMany({
@@ -27,12 +27,39 @@ export default async function CompPlansPage() {
     orderBy: { fullName: "asc" },
   });
 
-  const assignedPersonIds = new Set<string>();
-  plans.forEach((p) =>
-    p.assignments
-      .filter((a) => a.scopeType === "PERSON" && a.scopeId)
-      .forEach((a) => a.scopeId && assignedPersonIds.add(a.scopeId))
+  const planIds = plans.map((plan) => plan.id);
+  const activeAssignments = planIds.length
+    ? await prisma.compPlanAssignment.findMany({
+        where: {
+          planId: { in: planIds },
+          scopeType: CompAssignmentScope.PERSON,
+          active: true,
+          scopeId: { not: null },
+        },
+        select: { planId: true, scopeId: true },
+      })
+    : [];
+
+  const assignedPersonIdList = Array.from(
+    new Set(activeAssignments.flatMap((assignment) => (assignment.scopeId ? [assignment.scopeId] : [])))
   );
+  const assignedPeople = assignedPersonIdList.length
+    ? await prisma.person.findMany({
+        where: { id: { in: assignedPersonIdList } },
+        select: { id: true, fullName: true },
+      })
+    : [];
+  const personNameById = new Map(assignedPeople.map((person) => [person.id, person.fullName]));
+  const assignedByPlan: Record<string, { id: string; name: string }[]> = {};
+  activeAssignments.forEach((assignment) => {
+    if (!assignment.scopeId) return;
+    const name = personNameById.get(assignment.scopeId);
+    if (!name) return;
+    if (!assignedByPlan[assignment.planId]) assignedByPlan[assignment.planId] = [];
+    assignedByPlan[assignment.planId].push({ id: assignment.scopeId, name });
+  });
+
+  const assignedPersonIds = new Set<string>(assignedPersonIdList);
   const unassigned = people
     .filter((p) => !assignedPersonIds.has(p.id))
     .map((p) => ({ id: p.id, name: p.fullName }));
@@ -264,7 +291,7 @@ export default async function CompPlansPage() {
                           border: "1px solid #e5e7eb",
                         }}
                       >
-                        {plan.status}
+                        {plan.status === CompPlanStatus.ACTIVE ? "ACTIVE" : plan.status === CompPlanStatus.DRAFT ? "DRAFT" : plan.status}
                       </span>
                       <form action={duplicatePlan}>
                         <input type="hidden" name="planId" value={plan.id} />
@@ -299,6 +326,8 @@ export default async function CompPlansPage() {
                     </div>
                   </div>
                   <div style={{ color: "#555", marginTop: 4 }}>
+                    Agency: {plan.agency?.name || "No agency"}
+                    <br />
                     Assigned teams/users: {plan.assignments.length || 0}
                     <br />
                     Version: {plan.versions[0]?.effectiveStartMonth || "Current"}
@@ -310,7 +339,13 @@ export default async function CompPlansPage() {
           </div>
 
           <AssignDragBoard
-            plans={plans.map((p) => ({ id: p.id, name: p.name }))}
+            plans={plans.map((p) => ({
+              id: p.id,
+              name: p.name,
+              assignedCount: p.assignments.filter((a) => a.scopeType === "PERSON" && a.active).length,
+              assignedPeople: assignedByPlan[p.id] ?? [],
+              effectiveStartMonth: p.effectiveStartMonth,
+            }))}
             people={unassigned}
           />
         </div>

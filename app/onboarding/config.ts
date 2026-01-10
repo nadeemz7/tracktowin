@@ -58,6 +58,7 @@ export const DEFAULT_LOBS = [
     products: [
       { name: "Short Term Disability", productType: "PERSONAL" as const },
       { name: "Long Term Disability", productType: "PERSONAL" as const },
+      { name: "Supplemental Health Income", productType: "PERSONAL" as const },
     ],
   },
   {
@@ -66,6 +67,7 @@ export const DEFAULT_LOBS = [
     products: [
       { name: "Term", productType: "PERSONAL" as const },
       { name: "Whole Life", productType: "PERSONAL" as const },
+      { name: "Universal Life", productType: "PERSONAL" as const },
     ],
   },
   {

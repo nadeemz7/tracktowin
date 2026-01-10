@@ -5,7 +5,6 @@ import {
   ValidationError,
   assertNonNegativeInt,
   assertNonNegativeNumber,
-  normalizePremiumTargets,
 } from "@/lib/benchmarks/validate";
 import { hasBenchmarksWriteAccess } from "@/lib/benchmarks/guards";
 
@@ -48,14 +47,47 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Role not found in org" }, { status: 404 });
     }
 
-    const monthlyAppsTarget = assertNonNegativeInt(body.monthlyAppsTarget, "monthlyAppsTarget");
-    const monthlyPremiumTarget = assertNonNegativeNumber(body.monthlyPremiumTarget, "monthlyPremiumTarget");
+    const normalizeRecord = (raw: any, field: string, parser: (value: any, label: string) => number) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+      const out: Record<string, number> = {};
+      Object.entries(raw).forEach(([key, value]) => {
+        const id = String(key || "").trim();
+        if (!id) return;
+        out[id] = parser(value, `${field}.${id}`);
+      });
+      return out;
+    };
 
-    const { premiumMode, premiumByLob, premiumByBucket } = normalizePremiumTargets(
-      body.premiumMode,
-      body.premiumByLob,
-      body.premiumByBucket
+    const appGoalsByLobRaw = body.appGoalsByLobJson;
+    const activityTargetsByTypeRaw = body.activityTargetsByTypeJson;
+    const appGoalsByLobParsed = normalizeRecord(appGoalsByLobRaw, "appGoalsByLobJson", assertNonNegativeInt);
+    const activityTargetsByTypeParsed = normalizeRecord(
+      activityTargetsByTypeRaw,
+      "activityTargetsByTypeJson",
+      assertNonNegativeInt
     );
+
+    const premiumByBucketObj =
+      body.premiumByBucket && typeof body.premiumByBucket === "object" ? body.premiumByBucket : null;
+    if (!premiumByBucketObj) {
+      throw new ValidationError("premiumByBucket must be an object with PC and FS numbers", "premiumByBucket");
+    }
+    const pc = assertNonNegativeNumber(premiumByBucketObj.PC, "premiumByBucket.PC");
+    const fs = assertNonNegativeNumber(premiumByBucketObj.FS, "premiumByBucket.FS");
+    const ips =
+      premiumByBucketObj.IPS !== undefined && premiumByBucketObj.IPS !== null && premiumByBucketObj.IPS !== ""
+        ? assertNonNegativeNumber(premiumByBucketObj.IPS, "premiumByBucket.IPS")
+        : undefined;
+    const premiumByBucket = ips === undefined ? { PC: pc, FS: fs } : { PC: pc, FS: fs, IPS: ips };
+    const premiumMode = "BUCKET" as const;
+    const premiumByLob = null;
+
+    const monthlyAppsTarget = Object.values(appGoalsByLobParsed).reduce((sum, val) => sum + val, 0);
+    const monthlyPremiumTarget = pc + fs + (ips ?? 0);
+    const appGoalsByLobJson = Object.keys(appGoalsByLobParsed).length ? appGoalsByLobParsed : null;
+    const activityTargetsByTypeJson = Object.keys(activityTargetsByTypeParsed).length
+      ? activityTargetsByTypeParsed
+      : null;
 
     const expectation = await prisma.benchRoleExpectation.upsert({
       where: { roleId },
@@ -66,6 +98,8 @@ export async function POST(req: Request) {
         premiumMode,
         premiumByLob,
         premiumByBucket,
+        appGoalsByLobJson,
+        activityTargetsByTypeJson,
       },
       update: {
         monthlyAppsTarget,
@@ -73,6 +107,8 @@ export async function POST(req: Request) {
         premiumMode,
         premiumByLob,
         premiumByBucket,
+        appGoalsByLobJson,
+        activityTargetsByTypeJson,
       },
     });
 

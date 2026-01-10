@@ -9,6 +9,8 @@ type RequestBody = {
   dateFrom?: string;
   dateTo?: string;
   statuses?: PolicyStatus[];
+  peopleIds?: string[];
+  lobIds?: string[];
 };
 
 function parseDate(value: any): Date | null {
@@ -29,11 +31,18 @@ export async function POST(req: Request) {
     const endRaw = parseDate(body.dateTo) || new Date();
     const statuses = (Array.isArray(body.statuses) && body.statuses.length ? body.statuses : DEFAULT_STATUSES) as PolicyStatus[];
 
+    const peopleIds = Array.isArray(body.peopleIds)
+      ? body.peopleIds.map((id) => String(id)).filter((id) => id)
+      : [];
+    const lobIds = Array.isArray(body.lobIds) ? body.lobIds.map((id) => String(id)).filter((id) => id) : [];
+
     const report = await getBenchmarksReport({
       orgId: viewer.orgId,
       start: startRaw,
       end: endRaw,
       statuses,
+      personIds: peopleIds.length ? peopleIds : undefined,
+      lobIds: lobIds.length ? lobIds : undefined,
     });
 
     return NextResponse.json(report);

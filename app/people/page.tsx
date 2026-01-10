@@ -1,4 +1,5 @@
 import { AppShell } from "@/app/components/AppShell";
+import { getViewerContext } from "@/lib/getViewerContext";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import PeopleRolesClient, { RolesTab, OfficePlanTab } from "./PeopleRolesClient";
@@ -14,19 +15,37 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
   const personIdParam = Array.isArray(sp.personId) ? sp.personId[0] : sp.personId;
   const initialSelectedPersonId = typeof personIdParam === "string" ? personIdParam : null;
 
-  const [people, teams, agencies, roleExpectations, personOverrides] = await Promise.all([
-    prisma.person.findMany({
-      orderBy: { fullName: "asc" },
-      include: { team: { include: { agency: true } }, role: true, primaryAgency: true },
-    }),
-    prisma.team.findMany({
-      include: { roles: true, agency: true },
-      orderBy: { name: "asc" },
-    }),
-    prisma.agency.findMany({ orderBy: { name: "asc" } }),
-    prisma.benchRoleExpectation.findMany({ include: { role: { include: { team: true } } } }),
-    prisma.benchPersonOverride.findMany({ include: { person: true } }),
-  ]);
+  const viewer = await getViewerContext();
+  const orgId = viewer?.orgId ?? null;
+
+  const [people, teams, agencies, roleExpectations, personOverrides, linesOfBusiness, activityTypes] =
+    await Promise.all([
+      prisma.person.findMany({
+        orderBy: { fullName: "asc" },
+        include: { team: { include: { agency: true } }, role: true, primaryAgency: true },
+      }),
+      prisma.team.findMany({
+        include: { roles: true, agency: true },
+        orderBy: { name: "asc" },
+      }),
+      prisma.agency.findMany({ orderBy: { name: "asc" } }),
+      prisma.benchRoleExpectation.findMany({ include: { role: { include: { team: true } } } }),
+      prisma.benchPersonOverride.findMany({ include: { person: true } }),
+      orgId
+        ? prisma.lineOfBusiness.findMany({
+            where: { agencyId: orgId },
+            select: { id: true, name: true, premiumCategory: true },
+            orderBy: { name: "asc" },
+          })
+        : Promise.resolve([] as Array<{ id: string; name: string; premiumCategory: string }>),
+      orgId
+        ? prisma.activityType.findMany({
+            where: { agencyId: orgId, active: true },
+            select: { id: true, name: true, active: true },
+            orderBy: { name: "asc" },
+          })
+        : Promise.resolve([] as Array<{ id: string; name: string; active: boolean }>),
+    ]);
 
   async function createPerson(formData: FormData) {
     "use server";
@@ -208,7 +227,12 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
       ) : null}
 
       {activeTab === "roles" ? (
-        <RolesTab roles={roles} roleExpectations={roleExpectations} />
+        <RolesTab
+          roles={roles}
+          roleExpectations={roleExpectations}
+          activityTypes={activityTypes}
+          lobs={linesOfBusiness}
+        />
       ) : null}
 
       {activeTab === "office" ? (

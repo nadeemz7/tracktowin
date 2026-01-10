@@ -3,9 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getViewerContext } from "@/lib/getViewerContext";
 import {
   ValidationError,
-  normalizeOptionalPremiumTargets,
-  parseOptionalNonNegativeInt,
-  parseOptionalNonNegativeNumber,
+  assertNonNegativeInt,
+  assertNonNegativeNumber,
 } from "@/lib/benchmarks/validate";
 import { hasBenchmarksWriteAccess } from "@/lib/benchmarks/guards";
 
@@ -54,34 +53,62 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Person not found in org" }, { status: 404 });
     }
 
-    const monthlyAppsOverride = parseOptionalNonNegativeInt(body.monthlyAppsOverride, "monthlyAppsOverride");
-    const monthlyPremiumOverride = parseOptionalNonNegativeNumber(
-      body.monthlyPremiumOverride,
-      "monthlyPremiumOverride"
+    const normalizeRecord = (raw: any, field: string) => {
+      if (raw === undefined || raw === null) return null;
+      if (typeof raw !== "object" || Array.isArray(raw)) {
+        throw new ValidationError(`${field} must be an object`, field);
+      }
+      const out: Record<string, number> = {};
+      Object.entries(raw).forEach(([key, value]) => {
+        const id = String(key || "").trim();
+        if (!id) return;
+        out[id] = assertNonNegativeInt(value, `${field}.${id}`);
+      });
+      return Object.keys(out).length ? out : null;
+    };
+
+    const appGoalsByLobOverrideJson = normalizeRecord(body.appGoalsByLobOverrideJson, "appGoalsByLobOverrideJson");
+    const activityTargetsByTypeOverrideJson = normalizeRecord(
+      body.activityTargetsByTypeOverrideJson,
+      "activityTargetsByTypeOverrideJson"
     );
 
-    const { premiumMode, premiumByLob, premiumByBucket } = normalizeOptionalPremiumTargets(
-      body.premiumModeOverride,
-      body.premiumByLobOverride,
-      body.premiumByBucketOverride
-    );
+    let premiumByBucketOverride: { PC: number; FS: number; IPS?: number } | null = null;
+    if (body.premiumByBucketOverride !== undefined && body.premiumByBucketOverride !== null) {
+      if (typeof body.premiumByBucketOverride !== "object" || Array.isArray(body.premiumByBucketOverride)) {
+        throw new ValidationError("premiumByBucketOverride must be an object", "premiumByBucketOverride");
+      }
+      const pc = assertNonNegativeNumber(body.premiumByBucketOverride.PC, "premiumByBucketOverride.PC");
+      const fs = assertNonNegativeNumber(body.premiumByBucketOverride.FS, "premiumByBucketOverride.FS");
+      const ips =
+        body.premiumByBucketOverride.IPS !== undefined &&
+        body.premiumByBucketOverride.IPS !== null &&
+        body.premiumByBucketOverride.IPS !== ""
+          ? assertNonNegativeNumber(body.premiumByBucketOverride.IPS, "premiumByBucketOverride.IPS")
+          : undefined;
+      premiumByBucketOverride = ips === undefined ? { PC: pc, FS: fs } : { PC: pc, FS: fs, IPS: ips };
+    }
 
     const override = await prisma.benchPersonOverride.upsert({
       where: { personId },
       create: {
         personId,
-        monthlyAppsOverride,
-        monthlyPremiumOverride,
-        premiumModeOverride: premiumMode,
-        premiumByLobOverride: premiumByLob,
-        premiumByBucketOverride: premiumByBucket,
+        monthlyAppsOverride: null,
+        monthlyPremiumOverride: null,
+        premiumModeOverride: null,
+        premiumByLobOverride: null,
+        premiumByBucketOverride,
+        appGoalsByLobOverrideJson,
+        activityTargetsByTypeOverrideJson,
       },
       update: {
-        monthlyAppsOverride,
-        monthlyPremiumOverride,
-        premiumModeOverride: premiumMode,
-        premiumByLobOverride: premiumByLob,
-        premiumByBucketOverride: premiumByBucket,
+        monthlyAppsOverride: null,
+        monthlyPremiumOverride: null,
+        premiumModeOverride: null,
+        premiumByLobOverride: null,
+        premiumByBucketOverride,
+        appGoalsByLobOverrideJson,
+        activityTargetsByTypeOverrideJson,
       },
     });
 

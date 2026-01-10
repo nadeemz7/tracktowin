@@ -1,4 +1,5 @@
 import { AppShell } from "@/app/components/AppShell";
+import ConfirmSubmitButton from "@/app/components/ConfirmSubmitButton";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
@@ -260,17 +261,31 @@ export default async function AgenciesPage() {
                     borderRadius: 10,
                     padding: 12,
                     background: "#fff",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
+                    display: "grid",
                     gap: 12,
                   }}
                 >
-                  <div>
-                    <div style={{ fontWeight: 700 }}>{agency.name}</div>
-                    <div style={{ color: "#555", fontSize: 13, marginTop: 4 }}>
-                      {agency.profileName || "Office profile"} • Owner: {agency.ownerName || "Not set"}
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div>
+                      <div style={{ fontWeight: 700 }}>{agency.name}</div>
+                      <div style={{ color: "#6b7280", fontSize: 13, marginTop: 4 }}>Owner: {agency.ownerName || "—"}</div>
                     </div>
+                    <Link
+                      href={`/agencies/${agency.id}`}
+                      style={{
+                        padding: "8px 14px",
+                        borderRadius: 10,
+                        border: "1px solid #283618",
+                        background: "#283618",
+                        color: "#f8f9fa",
+                        fontWeight: 800,
+                      }}
+                    >
+                      Open
+                    </Link>
+                  </div>
+                  <div>
+                    <div style={{ color: "#555", fontSize: 13 }}>{agency.profileName || "Office profile"}</div>
                     <div style={{ color: "#555", fontSize: 13, marginTop: 4 }}>
                       Office Location: {agency.address || "Add address"}
                     </div>
@@ -286,27 +301,49 @@ export default async function AgenciesPage() {
                         {agency.peoplePrimary.length === 0 ? (
                           <div style={{ color: "#6b7280", fontSize: 13 }}>No people yet.</div>
                         ) : (
-                          agency.peoplePrimary.map((p) => (
-                            <form key={p.id} action={updatePrimaryAgency} style={{ display: "grid", gap: 6, gridTemplateColumns: "1.3fr 1fr auto", alignItems: "center", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-                              <div>
-                                <div style={{ fontWeight: 600 }}>{p.fullName}</div>
-                                <div style={{ color: "#6b7280", fontSize: 12 }}>{p.email || "No email"}</div>
-                              </div>
-                              <select name="primaryAgencyId" defaultValue={p.primaryAgencyId || agency.id} style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}>
-                                {agencies.map((ag) => (
-                                  <option key={ag.id} value={ag.id}>
-                                    {ag.name}
-                                  </option>
-                                ))}
-                              </select>
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <input type="hidden" name="personId" value={p.id} />
-                                <button type="submit" className="btn" style={{ padding: "6px 10px" }}>
-                                  Set primary
-                                </button>
-                              </div>
-                            </form>
-                          ))
+                          agency.peoplePrimary.map((p) => {
+                            const ownerName = (agency.ownerName || "").trim().toLowerCase();
+                            const personName = (p.fullName || "").trim().toLowerCase();
+                            const isOwner = !!ownerName && personName === ownerName;
+                            const badges = [
+                              ...(isOwner ? ["Owner"] : []),
+                              ...(p.isAdmin ? ["Admin"] : []),
+                              ...(p.isManager ? ["Manager"] : []),
+                            ];
+
+                            return (
+                              <form key={p.id} action={updatePrimaryAgency} style={{ display: "grid", gap: 6, gridTemplateColumns: "1.3fr 1fr auto", alignItems: "center", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+                                <div>
+                                  <div style={{ fontWeight: 600 }}>{p.fullName}</div>
+                                  <div style={{ color: "#6b7280", fontSize: 12 }}>{p.email || "No email"}</div>
+                                </div>
+                                <select name="primaryAgencyId" defaultValue={p.primaryAgencyId || agency.id} style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}>
+                                  {agencies.map((ag) => (
+                                    <option key={ag.id} value={ag.id}>
+                                      {ag.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                                  {badges.length ? (
+                                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                      {badges.map((badge) => (
+                                        <span key={badge} style={{ padding: "2px 8px", borderRadius: 999, background: "#f3f4f6", color: "#374151", fontSize: 11, fontWeight: 700 }}>
+                                          {badge}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                  <div style={{ display: "flex", gap: 6 }}>
+                                    <input type="hidden" name="personId" value={p.id} />
+                                    <button type="submit" className="btn" style={{ padding: "6px 10px" }}>
+                                      Set primary
+                                    </button>
+                                  </div>
+                                </div>
+                              </form>
+                            );
+                          })
                         )}
                         <form action={addPerson} style={{ marginTop: 6, display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))", alignItems: "center", border: "1px dashed #d1d5db", borderRadius: 10, padding: 10, background: "#f8fafc" }}>
                           <input type="hidden" name="primaryAgencyId" value={agency.id} />
@@ -334,24 +371,22 @@ export default async function AgenciesPage() {
                       </div>
                     </details>
                   </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <Link href={`/agencies/${agency.id}`} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #dfe5d6" }}>
-                      Open
-                    </Link>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
                     <form action={deleteAgency}>
                       <input type="hidden" name="agencyId" value={agency.id} />
-                      <button
-                        type="submit"
+                      <ConfirmSubmitButton
+                        confirmText={`Delete "${agency.name}"? This cannot be undone.`}
                         style={{
-                          padding: "8px 12px",
-                          borderRadius: 8,
-                          border: "1px solid #e31836",
-                          background: "#f8f9fa",
-                          color: "#e31836",
+                          padding: "8px 14px",
+                          borderRadius: 10,
+                          border: "1px solid #fecaca",
+                          background: "#fff",
+                          color: "#b91c1c",
+                          fontWeight: 700,
                         }}
                       >
                         Delete
-                      </button>
+                      </ConfirmSubmitButton>
                     </form>
                   </div>
                 </div>

@@ -5,6 +5,8 @@ import { useOrgLobs } from "./useOrgLobs";
 
 type Agency = { id: string; name: string; linesOfBusiness?: { id: string; name: string }[] };
 type Team = { id: string; name: string; agencyId: string; agency?: Agency | null; roles: { id: string; name: string }[] };
+type OrgLob = { id: string; name: string; premiumCategory?: string | null };
+type ActivityTypeOption = { id: string; name: string; active?: boolean | null };
 type Person = {
   id: string;
   fullName: string;
@@ -27,16 +29,16 @@ type RoleExpectation = {
   premiumMode?: "LOB" | "BUCKET";
   premiumByBucket?: { PC?: number; FS?: number; IPS?: number } | null;
   premiumByLob?: { lobId: string; premium: number }[] | null;
+  appGoalsByLobJson?: Record<string, number> | null;
+  activityTargetsByTypeJson?: Record<string, number> | null;
   role?: { id: string; name: string; team?: { id: string; name: string; agencyId: string } | null } | null;
 };
 
 type PersonOverride = {
   personId: string;
-  monthlyAppsOverride?: number | null;
-  monthlyPremiumOverride?: number | null;
-  premiumModeOverride?: "LOB" | "BUCKET" | null;
+  appGoalsByLobOverrideJson?: Record<string, number> | null;
   premiumByBucketOverride?: { PC?: number; FS?: number; IPS?: number } | null;
-  premiumByLobOverride?: { lobId: string; premium: number }[] | null;
+  activityTargetsByTypeOverrideJson?: Record<string, number> | null;
 };
 
 type Props = {
@@ -50,6 +52,55 @@ type Props = {
 
 type RoleWithTeam = { id: string; name: string; team?: Team | null };
 type SaveState = { saving: boolean; error: string | null; success: boolean };
+
+function useOrgActivityTypes() {
+  const [activityTypes, setActivityTypes] = useState<ActivityTypeOption[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const viewerRes = await fetch("/api/viewer/context");
+        if (!viewerRes.ok) throw new Error("Failed to load viewer context");
+        const viewerJson = await viewerRes.json();
+        const orgId = viewerJson?.viewer?.orgId;
+        if (!orgId) {
+          if (active) setActivityTypes([]);
+          return;
+        }
+
+        const typesRes = await fetch("/api/activity-types", { headers: { "x-org-id": String(orgId) } });
+        if (!typesRes.ok) throw new Error("Failed to load activity types");
+        const types = await typesRes.json();
+        const list = (Array.isArray(types) ? types : [])
+          .map((t: any) => ({
+            id: t.id,
+            name: t.name,
+            active: t.isActive ?? t.active,
+          }))
+          .filter((t: ActivityTypeOption) => t.id && t.name);
+        list.sort((a: ActivityTypeOption, b: ActivityTypeOption) => a.name.localeCompare(b.name));
+        if (active) setActivityTypes(list);
+      } catch (err: any) {
+        if (active) setError(err?.message || "Failed to load activity types");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return { activityTypes, loading, error };
+}
 
 function fmtInt(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return "—";
@@ -65,45 +116,12 @@ function badgeForPerson(p: Person, overrides: Map<string, PersonOverride>, expec
   const override = overrides.get(p.id);
   const hasOverride =
     override &&
-    (override.monthlyAppsOverride != null ||
-      override.monthlyPremiumOverride != null ||
-      override.premiumModeOverride != null ||
+    ((override.appGoalsByLobOverrideJson && Object.keys(override.appGoalsByLobOverrideJson).length > 0) ||
       (override.premiumByBucketOverride && Object.keys(override.premiumByBucketOverride).length > 0) ||
-      (override.premiumByLobOverride && override.premiumByLobOverride.length > 0));
+      (override.activityTargetsByTypeOverrideJson && Object.keys(override.activityTargetsByTypeOverrideJson).length > 0));
   if (hasOverride) return "Overridden";
   if (p.roleId && expectations.has(p.roleId)) return "Using Role Default";
   return "No expectation";
-}
-
-function effectiveExpectation(
-  p: Person,
-  overrides: Map<string, PersonOverride>,
-  expectations: Map<string, RoleExpectation>
-) {
-  const override = overrides.get(p.id);
-  if (
-    override &&
-    (override.monthlyAppsOverride != null ||
-      override.monthlyPremiumOverride != null ||
-      override.premiumModeOverride != null ||
-      (override.premiumByBucketOverride && Object.keys(override.premiumByBucketOverride).length > 0) ||
-      (override.premiumByLobOverride && override.premiumByLobOverride.length > 0))
-  ) {
-    return {
-      source: "Override",
-      apps: override.monthlyAppsOverride ?? null,
-      premium: override.monthlyPremiumOverride ?? null,
-    };
-  }
-  if (p.roleId && expectations.has(p.roleId)) {
-    const exp = expectations.get(p.roleId)!;
-    return {
-      source: "Role default",
-      apps: exp.monthlyAppsTarget ?? null,
-      premium: exp.monthlyPremiumTarget ?? null,
-    };
-  }
-  return { source: "None", apps: null, premium: null };
 }
 
 export default function PeopleRolesClient({
@@ -122,6 +140,7 @@ export default function PeopleRolesClient({
   const expectationsMap = useMemo(() => new Map(roleExpectations.map((r) => [r.roleId, r])), [roleExpectations]);
 
   const selected = selectedId ? localPeople.find((p) => p.id === selectedId) || null : null;
+  const roleDefaults = selected?.roleId ? expectationsMap.get(selected.roleId) : null;
 
   const [assignState, setAssignState] = useState<SaveState>({ saving: false, error: null, success: false });
   const [overrideState, setOverrideState] = useState<SaveState>({ saving: false, error: null, success: false });
@@ -133,18 +152,53 @@ export default function PeopleRolesClient({
   const [isManagerInput, setIsManagerInput] = useState<boolean>(false);
   const [activeInput, setActiveInput] = useState<boolean>(true);
 
-  const [appsOverride, setAppsOverride] = useState<string>("");
-  const [premiumOverride, setPremiumOverride] = useState<string>("");
-  const [premiumModeOverride, setPremiumModeOverride] = useState<"" | "LOB" | "BUCKET">("");
-  const [bucketPc, setBucketPc] = useState<string>("");
-  const [bucketFs, setBucketFs] = useState<string>("");
-  const [bucketIps, setBucketIps] = useState<string>("");
   const { lobs: orgLobs, loading: orgLobsLoading, error: orgLobsError } = useOrgLobs();
-  const [lobOverrideInputs, setLobOverrideInputs] = useState<Record<string, string>>({});
+  const { activityTypes: orgActivityTypes, loading: orgActivityLoading, error: orgActivityError } =
+    useOrgActivityTypes();
+  const activityNameById = useMemo(
+    () => new Map(orgActivityTypes.map((t) => [t.id, t.name])),
+    [orgActivityTypes]
+  );
+  const activeActivityTypes = useMemo(
+    () => orgActivityTypes.filter((t) => t.active !== false),
+    [orgActivityTypes]
+  );
+  const [overrideAppsByLobInputs, setOverrideAppsByLobInputs] = useState<Record<string, string>>({});
+  const [overrideBucketPc, setOverrideBucketPc] = useState<string>("");
+  const [overrideBucketFs, setOverrideBucketFs] = useState<string>("");
+  const [overrideBucketIps, setOverrideBucketIps] = useState<string>("");
+  const [overrideActivityTargets, setOverrideActivityTargets] = useState<Record<string, string>>({});
+  const [overrideActivityPickerOpen, setOverrideActivityPickerOpen] = useState<boolean>(false);
+  const [overrideActivityPickerValue, setOverrideActivityPickerValue] = useState<string>("");
+
+  const toOptionalInt = (value: string) => {
+    if (value.trim() === "") return null;
+    const num = Number(value);
+    if (!Number.isInteger(num) || num < 0) return null;
+    return num;
+  };
+
+  const toOptionalNumber = (value: string) => {
+    if (value.trim() === "") return null;
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) return null;
+    return num;
+  };
+
+  const overrideActivityTargetsParsed = useMemo(() => {
+    const parsed: Record<string, number> = {};
+    Object.entries(overrideActivityTargets).forEach(([id, value]) => {
+      if (!id) return;
+      const num = toOptionalInt(String(value ?? ""));
+      if (num == null) return;
+      parsed[id] = num;
+    });
+    return parsed;
+  }, [overrideActivityTargets]);
 
   useEffect(() => {
     if (!orgLobs.length) return;
-    setLobOverrideInputs((prev) => {
+    setOverrideAppsByLobInputs((prev) => {
       const next = { ...prev };
       orgLobs.forEach((lob) => {
         if (next[lob.id] === undefined) next[lob.id] = "";
@@ -163,7 +217,7 @@ export default function PeopleRolesClient({
 
   useEffect(() => {
     if (!selectedId) return;
-    hydrateLobOverrideInputs(selectedId);
+    hydrateOverrideInputs(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, orgLobs.length, overridesMap]);
 
@@ -175,40 +229,44 @@ export default function PeopleRolesClient({
     setIsAdminInput(Boolean(person.isAdmin));
     setIsManagerInput(Boolean(person.isManager));
     setActiveInput(person.active !== false);
-
-    const override = overridesMap.get(person.id);
-    setAppsOverride(override?.monthlyAppsOverride != null ? String(override.monthlyAppsOverride) : "");
-    setPremiumOverride(override?.monthlyPremiumOverride != null ? String(override.monthlyPremiumOverride) : "");
-    setPremiumModeOverride((override?.premiumModeOverride as any) || "");
-    setBucketPc(
-      override?.premiumByBucketOverride && override.premiumByBucketOverride.PC != null ? String(override.premiumByBucketOverride.PC) : ""
-    );
-    setBucketFs(
-      override?.premiumByBucketOverride && override.premiumByBucketOverride.FS != null ? String(override.premiumByBucketOverride.FS) : ""
-    );
-    setBucketIps(
-      override?.premiumByBucketOverride && override.premiumByBucketOverride.IPS != null ? String(override.premiumByBucketOverride.IPS) : ""
-    );
-    if (person?.id) hydrateLobOverrideInputs(person.id);
+    if (person?.id) hydrateOverrideInputs(person.id);
   }
 
-  function hydrateLobOverrideInputs(personId: string) {
-    if (!orgLobs.length) return;
+  function hydrateOverrideInputs(personId: string) {
     const override = overridesMap.get(personId);
-    if (override?.premiumModeOverride === "LOB" && Array.isArray(override.premiumByLobOverride)) {
-      const next: Record<string, string> = {};
-      orgLobs.forEach((lob) => {
-        const match = override.premiumByLobOverride?.find((row) => row?.lobId === lob.id);
-        next[lob.id] = match?.premium != null ? String(match.premium) : "";
+    const nextApps: Record<string, string> = {};
+    orgLobs.forEach((lob) => {
+      const val = override?.appGoalsByLobOverrideJson?.[lob.id];
+      nextApps[lob.id] = val != null ? String(val) : "";
+    });
+    setOverrideAppsByLobInputs(nextApps);
+
+    setOverrideBucketPc(
+      override?.premiumByBucketOverride && override.premiumByBucketOverride.PC != null
+        ? String(override.premiumByBucketOverride.PC)
+        : ""
+    );
+    setOverrideBucketFs(
+      override?.premiumByBucketOverride && override.premiumByBucketOverride.FS != null
+        ? String(override.premiumByBucketOverride.FS)
+        : ""
+    );
+    setOverrideBucketIps(
+      override?.premiumByBucketOverride && override.premiumByBucketOverride.IPS != null
+        ? String(override.premiumByBucketOverride.IPS)
+        : ""
+    );
+
+    const activityOverrides: Record<string, string> = {};
+    if (override?.activityTargetsByTypeOverrideJson) {
+      Object.entries(override.activityTargetsByTypeOverrideJson).forEach(([key, value]) => {
+        if (!key) return;
+        activityOverrides[key] = value != null ? String(value) : "0";
       });
-      setLobOverrideInputs((prev) => ({ ...prev, ...next }));
-    } else {
-      const cleared: Record<string, string> = {};
-      orgLobs.forEach((lob) => {
-        cleared[lob.id] = "";
-      });
-      setLobOverrideInputs((prev) => ({ ...prev, ...cleared }));
     }
+    setOverrideActivityTargets(activityOverrides);
+    setOverrideActivityPickerOpen(false);
+    setOverrideActivityPickerValue("");
   }
 
   function onSelect(personId: string) {
@@ -254,60 +312,70 @@ export default function PeopleRolesClient({
     try {
       const body: any = { personId: selected.id };
       if (clear) {
-        body.monthlyAppsOverride = null;
-        body.monthlyPremiumOverride = null;
-        body.premiumModeOverride = null;
+        body.appGoalsByLobOverrideJson = null;
         body.premiumByBucketOverride = null;
-        body.premiumByLobOverride = null;
+        body.activityTargetsByTypeOverrideJson = null;
       } else {
-        body.monthlyAppsOverride = appsOverride ? Number(appsOverride) : null;
-        body.monthlyPremiumOverride = premiumOverride ? Number(premiumOverride) : null;
-        body.premiumModeOverride = premiumModeOverride || null;
-        const toNumOrNull = (s: string) => (s.trim() === "" ? null : Number(s));
-        if (premiumModeOverride === "BUCKET") {
-          const pc = toNumOrNull(bucketPc);
-          const fs = toNumOrNull(bucketFs);
-          const ips = toNumOrNull(bucketIps);
-          const hasAnyBucket = pc != null || fs != null || ips != null;
-          if (hasAnyBucket) {
-            body.premiumByBucketOverride = {
-              ...(pc != null ? { PC: pc } : {}),
-              ...(fs != null ? { FS: fs } : {}),
-              ...(ips != null ? { IPS: ips } : {}),
-            };
-            body.premiumByLobOverride = null;
-            body.premiumModeOverride = "BUCKET";
-          } else {
-            body.premiumByBucketOverride = null;
-            body.premiumByLobOverride = null;
-            body.premiumModeOverride = null;
+        const appGoalsByLobOverrideJson: Record<string, number> = {};
+        orgLobs.forEach((lob) => {
+          const val = overrideAppsByLobInputs[lob.id] ?? "";
+          if (val.trim() === "") return;
+          const num = Number(val);
+          if (!Number.isInteger(num) || num < 0) {
+            throw new Error(`${lob.name} apps must be a non-negative integer`);
           }
-        } else if (premiumModeOverride === "LOB") {
-          const entries: { lobId: string; premium: number }[] = [];
-          orgLobs.forEach((lob) => {
-            const val = lobOverrideInputs[lob.id] ?? "";
-            if (val.trim() === "") return;
-            const num = Number(val);
-            if (!Number.isFinite(num) || num < 0) return;
-            entries.push({ lobId: lob.id, premium: num });
-          });
-          if (entries.length === 0) throw new Error("Enter at least one LoB premium for LoB mode");
-          body.premiumByLobOverride = entries;
+          appGoalsByLobOverrideJson[lob.id] = num;
+        });
+        body.appGoalsByLobOverrideJson = Object.keys(appGoalsByLobOverrideJson).length
+          ? appGoalsByLobOverrideJson
+          : null;
+
+        const pcRaw = overrideBucketPc.trim();
+        const fsRaw = overrideBucketFs.trim();
+        const ipsRaw = overrideBucketIps.trim();
+        if (!pcRaw && !fsRaw && !ipsRaw) {
           body.premiumByBucketOverride = null;
-          body.premiumModeOverride = "LOB";
         } else {
-          body.premiumByBucketOverride = null;
-          body.premiumByLobOverride = null;
+          if (!pcRaw || !fsRaw) {
+            throw new Error("PC and FS premiums are required to override premium targets");
+          }
+          const pc = Number(pcRaw);
+          const fs = Number(fsRaw);
+          if (!Number.isFinite(pc) || pc < 0) {
+            throw new Error("PC premium must be a non-negative number");
+          }
+          if (!Number.isFinite(fs) || fs < 0) {
+            throw new Error("FS premium must be a non-negative number");
+          }
+          let ips: number | null = null;
+          if (ipsRaw) {
+            const ipsVal = Number(ipsRaw);
+            if (!Number.isFinite(ipsVal) || ipsVal < 0) {
+              throw new Error("IPS premium must be a non-negative number");
+            }
+            ips = ipsVal;
+          }
+          body.premiumByBucketOverride = {
+            PC: pc,
+            FS: fs,
+            ...(ips != null ? { IPS: ips } : {}),
+          };
         }
 
-        if (
-          body.monthlyAppsOverride == null &&
-          body.monthlyPremiumOverride == null &&
-          body.premiumModeOverride == null
-        ) {
-          body.premiumByBucketOverride = null;
-          body.premiumByLobOverride = null;
-        }
+        const activityTargetsByTypeOverrideJson: Record<string, number> = {};
+        Object.entries(overrideActivityTargets).forEach(([activityTypeId, value]) => {
+          if (!activityTypeId) return;
+          const raw = String(value ?? "").trim();
+          if (raw === "") return;
+          const num = Number(raw);
+          if (!Number.isInteger(num) || num < 0) {
+            throw new Error("Activity targets must be non-negative integers");
+          }
+          activityTargetsByTypeOverrideJson[activityTypeId] = num;
+        });
+        body.activityTargetsByTypeOverrideJson = Object.keys(activityTargetsByTypeOverrideJson).length
+          ? activityTargetsByTypeOverrideJson
+          : null;
       }
 
       const res = await fetch("/api/benchmarks/person-overrides", {
@@ -326,11 +394,25 @@ export default function PeopleRolesClient({
         map.set(saved.personId, saved);
         return map;
       });
+      hydrateOverrideInputs(selected.id);
       setOverrideState({ saving: false, error: null, success: true });
     } catch (err: any) {
       setOverrideState({ saving: false, error: err?.message || "Save failed", success: false });
     }
   }
+
+  const sectionCardStyle = {
+    background: "#fff",
+    border: "1px solid #e5e7eb",
+    borderRadius: 12,
+    padding: 16,
+    display: "grid",
+    gap: 12,
+  };
+
+  const defaultAppsByLob: Record<string, number> = roleDefaults?.appGoalsByLobJson ?? {};
+  const defaultBucket: { PC?: number; FS?: number; IPS?: number } = roleDefaults?.premiumByBucket ?? {};
+  const defaultActivityTargets: Record<string, number> = roleDefaults?.activityTargetsByTypeJson ?? {};
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 16, alignItems: "start" }}>
@@ -474,144 +556,436 @@ export default function PeopleRolesClient({
             </div>
 
             <div style={{ marginTop: 18, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <div style={{ fontWeight: 700 }}>Benchmarks Overrides</div>
-                  {(() => {
-                    const eff = effectiveExpectation(selected, overridesMap, expectationsMap);
-                    return (
-                      <div style={{ color: "#6b7280", fontSize: 13, marginTop: 2 }}>
-                        Effective: {eff.source}
-                        {eff.apps != null ? ` • Apps: ${eff.apps}` : ""}
-                        {eff.premium != null ? ` • Premium: ${eff.premium}` : ""}
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Benchmarks Targets</div>
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={sectionCardStyle}>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div style={{ fontWeight: 700 }}>Role defaults</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>Read-only. Based on the assigned role.</div>
+                  </div>
+
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Apps by Line of Business</div>
+                    {orgLobsLoading ? (
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>Loading lines of business…</div>
+                    ) : orgLobsError ? (
+                      <div style={{ color: "#b91c1c", fontSize: 13 }}>{orgLobsError}</div>
+                    ) : orgLobs.length ? (
+                      orgLobs.map((lob) => {
+                        const val = Number.isFinite(defaultAppsByLob[lob.id])
+                          ? Number(defaultAppsByLob[lob.id])
+                          : 0;
+                        return (
+                          <div
+                            key={lob.id}
+                            style={{
+                              display: "grid",
+                              gap: 4,
+                              gridTemplateColumns: "1fr 180px",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{lob.name}</span>
+                            <span>{val}</span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>No lines of business.</div>
+                    )}
+                  </div>
+
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Premium by bucket</div>
+                    <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontWeight: 600 }}>PC</span>
+                        <span>{Number.isFinite(defaultBucket.PC ?? 0) ? (defaultBucket.PC ?? 0) : 0}</span>
                       </div>
-                    );
-                  })()}
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontWeight: 600 }}>FS</span>
+                        <span>{Number.isFinite(defaultBucket.FS ?? 0) ? (defaultBucket.FS ?? 0) : 0}</span>
+                      </div>
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontWeight: 600 }}>IPS</span>
+                        <span>{Number.isFinite(defaultBucket.IPS ?? 0) ? (defaultBucket.IPS ?? 0) : 0}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Activity targets</div>
+                    {Object.keys(defaultActivityTargets).length === 0 ? (
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>No activity targets.</div>
+                    ) : (
+                      Object.entries(defaultActivityTargets).map(([id, value]) => (
+                        <div
+                          key={id}
+                          style={{
+                            display: "grid",
+                            gap: 4,
+                            gridTemplateColumns: "1fr 180px",
+                            alignItems: "center",
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{activityNameById.get(id) || "Activity"}</span>
+                          <span>{Number.isFinite(Number(value)) ? Number(value) : 0}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginTop: 10 }}>
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontWeight: 600 }}>Monthly apps override</span>
-                  <input
-                    type="number"
-                    value={appsOverride}
-                    onChange={(e) => setAppsOverride(e.target.value)}
-                    placeholder="Leave blank to inherit"
-                    style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                  />
-                </label>
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontWeight: 600 }}>Monthly premium override</span>
-                  <input
-                    type="number"
-                    value={premiumOverride}
-                    onChange={(e) => setPremiumOverride(e.target.value)}
-                    placeholder="Leave blank to inherit"
-                    style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                  />
-                </label>
-              </div>
+                <div style={sectionCardStyle}>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div style={{ fontWeight: 700 }}>Overrides (this person)</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>
+                      Override only what you need; leave blanks to inherit.
+                    </div>
+                  </div>
 
-              <label style={{ display: "grid", gap: 6, marginTop: 10 }}>
-                <span style={{ fontWeight: 600 }}>Premium mode override</span>
-                <select
-                  value={premiumModeOverride}
-                  onChange={(e) => setPremiumModeOverride(e.target.value as any)}
-                  style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", maxWidth: 260 }}
-                >
-                  <option value="">Inherit</option>
-                  <option value="BUCKET">Bucket totals</option>
-                  <option value="LOB">By LoB</option>
-                </select>
-              </label>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Apps by Line of Business</div>
+                    {orgLobsLoading ? (
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>Loading lines of business…</div>
+                    ) : orgLobsError ? (
+                      <div style={{ color: "#b91c1c", fontSize: 13 }}>{orgLobsError}</div>
+                    ) : orgLobs.length ? (
+                      orgLobs.map((lob) => (
+                        <label
+                          key={lob.id}
+                          style={{
+                            display: "grid",
+                            gap: 4,
+                            gridTemplateColumns: "1fr 180px",
+                            alignItems: "center",
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{lob.name}</span>
+                          <input
+                            type="number"
+                            value={overrideAppsByLobInputs[lob.id] ?? ""}
+                            onChange={(e) =>
+                              setOverrideAppsByLobInputs((prev) => ({
+                                ...prev,
+                                [lob.id]: e.target.value,
+                              }))
+                            }
+                            placeholder="Inherit"
+                            style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                          />
+                        </label>
+                      ))
+                    ) : (
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>No lines of business.</div>
+                    )}
+                  </div>
 
-              {premiumModeOverride === "BUCKET" ? (
-                <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: 8 }}>
-                  <label style={{ display: "grid", gap: 4 }}>
-                    <span style={{ fontWeight: 600 }}>PC premium</span>
-                    <input
-                      type="number"
-                      value={bucketPc}
-                      onChange={(e) => setBucketPc(e.target.value)}
-                      placeholder="0"
-                      style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                    />
-                  </label>
-                  <label style={{ display: "grid", gap: 4 }}>
-                    <span style={{ fontWeight: 600 }}>FS premium</span>
-                    <input
-                      type="number"
-                      value={bucketFs}
-                      onChange={(e) => setBucketFs(e.target.value)}
-                      placeholder="0"
-                      style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                    />
-                  </label>
-                  <label style={{ display: "grid", gap: 4 }}>
-                    <span style={{ fontWeight: 600 }}>IPS premium (optional)</span>
-                    <input
-                      type="number"
-                      value={bucketIps}
-                      onChange={(e) => setBucketIps(e.target.value)}
-                      placeholder="0"
-                      style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                    />
-                  </label>
-                </div>
-              ) : null}
-
-              {premiumModeOverride === "LOB" ? (
-                <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                  {orgLobsError ? (
-                    <div style={{ color: "#b91c1c", fontSize: 13 }}>{orgLobsError}</div>
-                  ) : null}
-                  {orgLobsLoading ? (
-                    <div style={{ color: "#6b7280", fontSize: 13 }}>Loading lines of business…</div>
-                  ) : (
-                    orgLobs.map((lob) => (
-                      <label key={lob.id} style={{ display: "grid", gap: 4, gridTemplateColumns: "1fr 180px", alignItems: "center" }}>
-                        <span style={{ fontWeight: 600 }}>
-                          {lob.name} {lob.premiumCategory ? <span style={{ color: "#6b7280", fontSize: 12 }}>({lob.premiumCategory})</span> : null}
-                        </span>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Premium by bucket</div>
+                    <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontWeight: 600 }}>PC premium</span>
                         <input
                           type="number"
-                          value={lobOverrideInputs[lob.id] ?? ""}
-                          onChange={(e) =>
-                            setLobOverrideInputs((prev) => ({
-                              ...prev,
-                              [lob.id]: e.target.value,
-                            }))
-                          }
-                          placeholder="Premium"
+                          value={overrideBucketPc}
+                          onChange={(e) => setOverrideBucketPc(e.target.value)}
+                          placeholder="Inherit"
                           style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
                         />
                       </label>
-                    ))
-                  )}
-                  <div style={{ color: "#6b7280", fontSize: 12 }}>Enter at least one LoB premium to save.</div>
-                </div>
-              ) : null}
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontWeight: 600 }}>FS premium</span>
+                        <input
+                          type="number"
+                          value={overrideBucketFs}
+                          onChange={(e) => setOverrideBucketFs(e.target.value)}
+                          placeholder="Inherit"
+                          style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                        />
+                      </label>
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontWeight: 600 }}>IPS premium (optional)</span>
+                        <input
+                          type="number"
+                          value={overrideBucketIps}
+                          onChange={(e) => setOverrideBucketIps(e.target.value)}
+                          placeholder="Inherit"
+                          style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                        />
+                      </label>
+                    </div>
+                  </div>
 
-              <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
-                <button
-                  type="button"
-                  onClick={() => saveOverrides(false)}
-                  disabled={overrideState.saving}
-                  style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #111827", background: "#111827", color: "#fff", fontWeight: 700 }}
-                >
-                  {overrideState.saving ? "Saving…" : "Save Overrides"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => saveOverrides(true)}
-                  disabled={overrideState.saving}
-                  style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#fff", color: "#111827", fontWeight: 700 }}
-                >
-                  Clear Overrides
-                </button>
-                {overrideState.error ? <span style={{ color: "#b91c1c", fontSize: 13 }}>{overrideState.error}</span> : null}
-                {overrideState.success ? <span style={{ color: "#065f46", fontSize: 13 }}>Saved</span> : null}
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Activity targets</div>
+                    {orgActivityError ? <div style={{ color: "#b91c1c", fontSize: 13 }}>{orgActivityError}</div> : null}
+                    {orgActivityLoading ? (
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>Loading activity types…</div>
+                    ) : (
+                      <>
+                        {Object.keys(overrideActivityTargets).length === 0 ? (
+                          <div style={{ color: "#6b7280", fontSize: 13 }}>No activity overrides yet.</div>
+                        ) : (
+                          Object.keys(overrideActivityTargets).map((id) => (
+                            <div
+                              key={id}
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "1fr 180px auto",
+                                gap: 8,
+                                alignItems: "center",
+                                border: "1px solid #e5e7eb",
+                                borderRadius: 10,
+                                padding: 10,
+                                background: "#f8fafc",
+                              }}
+                            >
+                              <div style={{ fontWeight: 600 }}>{activityNameById.get(id) || "Activity"}</div>
+                              <input
+                                type="number"
+                                value={overrideActivityTargets[id] ?? ""}
+                                onChange={(e) =>
+                                  setOverrideActivityTargets((prev) => ({
+                                    ...prev,
+                                    [id]: e.target.value,
+                                  }))
+                                }
+                                placeholder="Monthly target"
+                                style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOverrideActivityTargets((prev) => {
+                                    const next = { ...prev };
+                                    delete next[id];
+                                    return next;
+                                  })
+                                }
+                                style={{
+                                  padding: "8px 10px",
+                                  borderRadius: 8,
+                                  border: "1px solid #e5e7eb",
+                                  background: "#fff",
+                                  color: "#111827",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))
+                        )}
+
+                        {(() => {
+                          const addedIds = new Set(Object.keys(overrideActivityTargets));
+                          const remainingTypes = activeActivityTypes.filter((t) => !addedIds.has(t.id));
+                          return (
+                            <>
+                              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setOverrideActivityPickerOpen((prev) => !prev)}
+                                  disabled={!remainingTypes.length}
+                                  style={{
+                                    padding: "8px 12px",
+                                    borderRadius: 8,
+                                    border: "1px solid #111827",
+                                    background: "#111827",
+                                    color: "#fff",
+                                    fontWeight: 700,
+                                    opacity: remainingTypes.length ? 1 : 0.6,
+                                  }}
+                                >
+                                  + Add activity target
+                                </button>
+                                {!remainingTypes.length ? (
+                                  <span style={{ color: "#6b7280", fontSize: 12 }}>All activity types added.</span>
+                                ) : null}
+                              </div>
+
+                              {overrideActivityPickerOpen ? (
+                                <select
+                                  value={overrideActivityPickerValue}
+                                  onChange={(e) => {
+                                    const nextId = e.target.value;
+                                    if (!nextId) return;
+                                    setOverrideActivityTargets((prev) => ({
+                                      ...prev,
+                                      [nextId]: prev[nextId] ?? "0",
+                                    }));
+                                    setOverrideActivityPickerValue("");
+                                    setOverrideActivityPickerOpen(false);
+                                  }}
+                                  style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", maxWidth: 320 }}
+                                >
+                                  <option value="">Select activity</option>
+                                  {remainingTypes.map((t) => (
+                                    <option key={t.id} value={t.id}>
+                                      {t.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : null}
+                            </>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={() => saveOverrides(false)}
+                      disabled={overrideState.saving}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #111827",
+                        background: "#111827",
+                        color: "#fff",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {overrideState.saving ? "Saving…" : "Save Overrides"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => saveOverrides(true)}
+                      disabled={overrideState.saving}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #e5e7eb",
+                        background: "#fff",
+                        color: "#111827",
+                        fontWeight: 700,
+                      }}
+                    >
+                      Clear Overrides
+                    </button>
+                    {overrideState.error ? (
+                      <span style={{ color: "#b91c1c", fontSize: 13 }}>{overrideState.error}</span>
+                    ) : null}
+                    {overrideState.success ? <span style={{ color: "#065f46", fontSize: 13 }}>Saved</span> : null}
+                  </div>
+                </div>
+
+                <div style={sectionCardStyle}>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div style={{ fontWeight: 700 }}>Effective targets</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>Overrides take precedence over role defaults.</div>
+                  </div>
+
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Apps by Line of Business</div>
+                    {orgLobsLoading ? (
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>Loading lines of business…</div>
+                    ) : orgLobsError ? (
+                      <div style={{ color: "#b91c1c", fontSize: 13 }}>{orgLobsError}</div>
+                    ) : orgLobs.length ? (
+                      orgLobs.map((lob) => {
+                        const overrideVal = toOptionalInt(overrideAppsByLobInputs[lob.id] ?? "");
+                        const defaultVal = Number.isFinite(defaultAppsByLob[lob.id])
+                          ? Number(defaultAppsByLob[lob.id])
+                          : 0;
+                        const effectiveVal = overrideVal != null ? overrideVal : defaultVal;
+                        return (
+                          <div
+                            key={lob.id}
+                            style={{
+                              display: "grid",
+                              gap: 4,
+                              gridTemplateColumns: "1fr 180px",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{lob.name}</span>
+                            <span>{effectiveVal}</span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>No lines of business.</div>
+                    )}
+                  </div>
+
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Premium by bucket</div>
+                    <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                      {(() => {
+                        const overridePc = toOptionalNumber(overrideBucketPc);
+                        const overrideFs = toOptionalNumber(overrideBucketFs);
+                        const overrideIps = toOptionalNumber(overrideBucketIps);
+                        const effectivePc = overridePc != null ? overridePc : Number(defaultBucket.PC ?? 0);
+                        const effectiveFs = overrideFs != null ? overrideFs : Number(defaultBucket.FS ?? 0);
+                        const effectiveIps = overrideIps != null ? overrideIps : Number(defaultBucket.IPS ?? 0);
+                        return (
+                          <>
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <span style={{ fontWeight: 600 }}>PC</span>
+                              <span>{Number.isFinite(effectivePc) ? effectivePc : 0}</span>
+                            </div>
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <span style={{ fontWeight: 600 }}>FS</span>
+                              <span>{Number.isFinite(effectiveFs) ? effectiveFs : 0}</span>
+                            </div>
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <span style={{ fontWeight: 600 }}>IPS</span>
+                              <span>{Number.isFinite(effectiveIps) ? effectiveIps : 0}</span>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Activity targets</div>
+                    {(() => {
+                      const ids = new Set<string>();
+                      Object.keys(defaultActivityTargets).forEach((id) => ids.add(id));
+                      Object.keys(overrideActivityTargetsParsed).forEach((id) => ids.add(id));
+                      const list = Array.from(ids);
+                      list.sort((a, b) => {
+                        const nameA = activityNameById.get(a) || a;
+                        const nameB = activityNameById.get(b) || b;
+                        return nameA.localeCompare(nameB);
+                      });
+
+                      if (!list.length) {
+                        return <div style={{ color: "#6b7280", fontSize: 13 }}>No activity targets.</div>;
+                      }
+
+                      return list.map((id) => {
+                        const overrideVal = overrideActivityTargetsParsed[id];
+                        const defaultVal = defaultActivityTargets[id];
+                        const effectiveVal =
+                          overrideVal != null
+                            ? overrideVal
+                            : Number.isFinite(Number(defaultVal))
+                              ? Number(defaultVal)
+                              : 0;
+                        return (
+                          <div
+                            key={id}
+                            style={{
+                              display: "grid",
+                              gap: 4,
+                              gridTemplateColumns: "1fr 180px",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{activityNameById.get(id) || "Activity"}</span>
+                            <span>{effectiveVal}</span>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
               </div>
             </div>
           </>
@@ -624,31 +998,46 @@ export default function PeopleRolesClient({
 type RolesTabProps = {
   roles: RoleWithTeam[];
   roleExpectations: RoleExpectation[];
+  activityTypes: ActivityTypeOption[];
+  lobs: OrgLob[];
 };
 
-export function RolesTab({ roles, roleExpectations }: RolesTabProps) {
+export function RolesTab({ roles, roleExpectations, activityTypes, lobs }: RolesTabProps) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [expectationsMap, setExpectationsMap] = useState<Map<string, RoleExpectation>>(
     () => new Map(roleExpectations.map((r) => [r.roleId, r]))
   );
   const sortedRoles = useMemo(() => [...roles].sort((a, b) => a.name.localeCompare(b.name)), [roles]);
 
-  const [appsInput, setAppsInput] = useState<string>("");
-  const [premiumInput, setPremiumInput] = useState<string>("");
-  const [premiumMode, setPremiumMode] = useState<"" | "LOB" | "BUCKET">("");
-  const [bucketPc, setBucketPc] = useState<string>("");
-  const [bucketFs, setBucketFs] = useState<string>("");
-  const [bucketIps, setBucketIps] = useState<string>("");
-  const { lobs, loading: lobsLoading, error: lobsError } = useOrgLobs();
-  const [lobInputs, setLobInputs] = useState<Record<string, string>>({});
+  const [bucketPc, setBucketPc] = useState<number>(0);
+  const [bucketFs, setBucketFs] = useState<number>(0);
+  const [bucketIps, setBucketIps] = useState<number>(0);
+  const [appGoalsByLobInputs, setAppGoalsByLobInputs] = useState<Record<string, number>>({});
+  const [activityTargetsByTypeInputs, setActivityTargetsByTypeInputs] = useState<Record<string, number>>({});
+  const [activityPickerOpen, setActivityPickerOpen] = useState<boolean>(false);
+  const [activityPickerValue, setActivityPickerValue] = useState<string>("");
   const [state, setState] = useState<SaveState>({ saving: false, error: null, success: false });
+
+  const toNonNegativeInt = (value: string) => {
+    if (value.trim() === "") return 0;
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) return 0;
+    return Math.round(num);
+  };
+
+  const toNonNegativeNumber = (value: string) => {
+    if (value.trim() === "") return 0;
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) return 0;
+    return num;
+  };
 
   useEffect(() => {
     if (!lobs.length) return;
-    setLobInputs((prev) => {
+    setAppGoalsByLobInputs((prev) => {
       const next = { ...prev };
       lobs.forEach((lob) => {
-        if (next[lob.id] === undefined) next[lob.id] = "";
+        if (next[lob.id] === undefined) next[lob.id] = 0;
       });
       return next;
     });
@@ -657,72 +1046,84 @@ export function RolesTab({ roles, roleExpectations }: RolesTabProps) {
   function openRole(roleId: string) {
     const exp = expectationsMap.get(roleId);
     setExpanded((prev) => (prev === roleId ? null : roleId));
-    setAppsInput(exp ? String(exp.monthlyAppsTarget ?? "") : "");
-    setPremiumInput(exp ? String(exp.monthlyPremiumTarget ?? "") : "");
-    setPremiumMode((exp as any)?.premiumMode ?? "");
-    const bucket = (exp as any)?.premiumByBucket || {};
-    setBucketPc(bucket.PC != null ? String(bucket.PC) : "");
-    setBucketFs(bucket.FS != null ? String(bucket.FS) : "");
-    setBucketIps(bucket.IPS != null ? String(bucket.IPS) : "");
-    if ((exp as any)?.premiumMode === "LOB" && Array.isArray((exp as any)?.premiumByLob)) {
-      const next: Record<string, string> = {};
-      lobs.forEach((lob) => {
-        const match = ((exp as any).premiumByLob as any[]).find((row) => row?.lobId === lob.id);
-        next[lob.id] = match?.premium != null ? String(match.premium) : "";
+    const bucket = exp?.premiumByBucket || {};
+    setBucketPc(typeof bucket.PC === "number" && Number.isFinite(bucket.PC) ? bucket.PC : 0);
+    setBucketFs(typeof bucket.FS === "number" && Number.isFinite(bucket.FS) ? bucket.FS : 0);
+    setBucketIps(typeof bucket.IPS === "number" && Number.isFinite(bucket.IPS) ? bucket.IPS : 0);
+    const appGoalsRaw =
+      exp?.appGoalsByLobJson && typeof exp.appGoalsByLobJson === "object" ? exp.appGoalsByLobJson : null;
+    const nextAppGoals: Record<string, number> = {};
+    lobs.forEach((lob) => {
+      const val = appGoalsRaw && (appGoalsRaw as Record<string, any>)[lob.id];
+      const num = typeof val === "number" && Number.isFinite(val) ? val : 0;
+      nextAppGoals[lob.id] = Math.round(num);
+    });
+    setAppGoalsByLobInputs(nextAppGoals);
+
+    const activityTargetsRaw =
+      exp?.activityTargetsByTypeJson && typeof exp.activityTargetsByTypeJson === "object"
+        ? exp.activityTargetsByTypeJson
+        : null;
+    const nextActivityTargets: Record<string, number> = {};
+    if (activityTargetsRaw) {
+      Object.entries(activityTargetsRaw as Record<string, any>).forEach(([key, value]) => {
+        if (!key) return;
+        const num = typeof value === "number" && Number.isFinite(value) ? value : 0;
+        nextActivityTargets[key] = Math.round(num);
       });
-      setLobInputs((prev) => ({ ...prev, ...next }));
-    } else {
-      const cleared: Record<string, string> = {};
-      lobs.forEach((lob) => {
-        cleared[lob.id] = "";
-      });
-      setLobInputs((prev) => ({ ...prev, ...cleared }));
     }
+    setActivityTargetsByTypeInputs(nextActivityTargets);
+    setActivityPickerOpen(false);
+    setActivityPickerValue("");
     setState({ saving: false, error: null, success: false });
   }
+
+  useEffect(() => {
+    if (!expanded || !lobs.length) return;
+    const exp = expectationsMap.get(expanded);
+    if (!exp) return;
+    const appGoalsRaw =
+      exp.appGoalsByLobJson && typeof exp.appGoalsByLobJson === "object" ? exp.appGoalsByLobJson : null;
+    const nextAppGoals: Record<string, number> = {};
+    lobs.forEach((lob) => {
+      const val = appGoalsRaw && (appGoalsRaw as Record<string, any>)[lob.id];
+      const num = typeof val === "number" && Number.isFinite(val) ? val : 0;
+      nextAppGoals[lob.id] = Math.round(num);
+    });
+    setAppGoalsByLobInputs(nextAppGoals);
+  }, [expanded, lobs, expectationsMap]);
 
   async function save(roleId: string) {
     setState({ saving: true, error: null, success: false });
     try {
-      const apps = Number(appsInput);
-      if (!Number.isInteger(apps) || apps < 0) throw new Error("Monthly apps must be a non-negative integer");
-      const premium = Number(premiumInput);
-      if (!Number.isFinite(premium) || premium < 0) throw new Error("Monthly premium must be a non-negative number");
-      if (!premiumMode) throw new Error("Select a premium mode");
+      const appGoalsByLobJson: Record<string, number> = {};
+      lobs.forEach((lob) => {
+        const value = appGoalsByLobInputs[lob.id];
+        const num = Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+        appGoalsByLobJson[lob.id] = num;
+      });
 
-      const body: any = {
-        roleId,
-        monthlyAppsTarget: apps,
-        monthlyPremiumTarget: premium,
-        premiumMode,
+      const activityTargetsByTypeJson: Record<string, number> = {};
+      Object.entries(activityTargetsByTypeInputs).forEach(([activityTypeId, value]) => {
+        if (!activityTypeId) return;
+        const num = Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+        activityTargetsByTypeJson[activityTypeId] = num;
+      });
+
+      const premiumByBucket = {
+        PC: Number.isFinite(bucketPc) && bucketPc >= 0 ? bucketPc : 0,
+        FS: Number.isFinite(bucketFs) && bucketFs >= 0 ? bucketFs : 0,
+        ...(bucketIps !== 0 ? { IPS: bucketIps } : {}),
       };
 
-      const toNumOrNull = (s: string) => (s.trim() === "" ? null : Number(s));
-      if (premiumMode === "BUCKET") {
-        const pc = toNumOrNull(bucketPc);
-        const fs = toNumOrNull(bucketFs);
-        const ips = toNumOrNull(bucketIps);
-        const hasAnyBucket = pc != null || fs != null || ips != null;
-        if (!hasAnyBucket) throw new Error("Enter at least PC or FS premium for bucket mode");
-        body.premiumByBucket = {
-          ...(pc != null ? { PC: pc } : {}),
-          ...(fs != null ? { FS: fs } : {}),
-          ...(ips != null ? { IPS: ips } : {}),
-        };
-        body.premiumByLob = null;
-      } else if (premiumMode === "LOB") {
-        const entries: { lobId: string; premium: number }[] = [];
-        lobs.forEach((lob) => {
-          const val = lobInputs[lob.id] ?? "";
-          if (val.trim() === "") return;
-          const num = Number(val);
-          if (!Number.isFinite(num) || num < 0) return;
-          entries.push({ lobId: lob.id, premium: num });
-        });
-        if (entries.length === 0) throw new Error("Enter at least one LoB premium for LoB mode");
-        body.premiumByLob = entries;
-        body.premiumByBucket = null;
-      }
+      const body = {
+        roleId,
+        appGoalsByLobJson: lobs.length ? appGoalsByLobJson : null,
+        activityTargetsByTypeJson: Object.keys(activityTargetsByTypeJson).length
+          ? activityTargetsByTypeJson
+          : null,
+        premiumByBucket,
+      };
 
       const res = await fetch("/api/benchmarks/role-expectations", {
         method: "POST",
@@ -763,12 +1164,17 @@ export function RolesTab({ roles, roleExpectations }: RolesTabProps) {
         map.delete(roleId);
         return map;
       });
-      setAppsInput("");
-      setPremiumInput("");
-      setPremiumMode("");
-      setBucketPc("");
-      setBucketFs("");
-      setBucketIps("");
+      setBucketPc(0);
+      setBucketFs(0);
+      setBucketIps(0);
+      const cleared: Record<string, number> = {};
+      lobs.forEach((lob) => {
+        cleared[lob.id] = 0;
+      });
+      setAppGoalsByLobInputs(cleared);
+      setActivityTargetsByTypeInputs({});
+      setActivityPickerOpen(false);
+      setActivityPickerValue("");
       setState({ saving: false, error: null, success: true });
     } catch (err: any) {
       setState({ saving: false, error: err?.message || "Clear failed", success: false });
@@ -823,49 +1229,67 @@ export function RolesTab({ roles, roleExpectations }: RolesTabProps) {
               </button>
 
               {open ? (
-                <div style={{ marginTop: 10, borderTop: "1px solid #e5e7eb", paddingTop: 10, display: "grid", gap: 10 }}>
-                  <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <span style={{ fontWeight: 600 }}>Monthly apps target</span>
-                      <input
-                        type="number"
-                        value={appsInput}
-                        onChange={(e) => setAppsInput(e.target.value)}
-                        style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                      />
-                    </label>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <span style={{ fontWeight: 600 }}>Monthly premium target</span>
-                      <input
-                        type="number"
-                        value={premiumInput}
-                        onChange={(e) => setPremiumInput(e.target.value)}
-                        style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                      />
-                    </label>
+                <div style={{ marginTop: 10, borderTop: "1px solid #e5e7eb", paddingTop: 10, display: "grid", gap: 12 }}>
+                  <div
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 16,
+                      display: "grid",
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontWeight: 700 }}>Apps targets by Line of Business</div>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                        These are role defaults. People can override individually.
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {lobs.map((lob) => (
+                        <label key={lob.id} style={{ display: "grid", gap: 4, gridTemplateColumns: "1fr 180px", alignItems: "center" }}>
+                          <span style={{ fontWeight: 600 }}>{lob.name}</span>
+                          <input
+                            type="number"
+                            value={appGoalsByLobInputs[lob.id] ?? 0}
+                            onChange={(e) =>
+                              setAppGoalsByLobInputs((prev) => ({
+                                ...prev,
+                                [lob.id]: toNonNegativeInt(e.target.value),
+                              }))
+                            }
+                            placeholder="Monthly apps"
+                            style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                          />
+                        </label>
+                      ))}
+                    </div>
                   </div>
 
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontWeight: 600 }}>Premium mode</span>
-                    <select
-                      value={premiumMode}
-                      onChange={(e) => setPremiumMode(e.target.value as any)}
-                      style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", maxWidth: 260 }}
-                    >
-                      <option value="">Select</option>
-                      <option value="BUCKET">Bucket totals</option>
-                      <option value="LOB">By LoB</option>
-                    </select>
-                  </label>
-
-                  {premiumMode === "BUCKET" ? (
+                  <div
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 16,
+                      display: "grid",
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontWeight: 700 }}>Premium targets (bucket totals)</div>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                        These are role defaults. People can override individually.
+                      </div>
+                    </div>
                     <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
                       <label style={{ display: "grid", gap: 4 }}>
                         <span style={{ fontWeight: 600 }}>PC premium</span>
                         <input
                           type="number"
                           value={bucketPc}
-                          onChange={(e) => setBucketPc(e.target.value)}
+                          onChange={(e) => setBucketPc(toNonNegativeNumber(e.target.value))}
                           style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
                         />
                       </label>
@@ -874,7 +1298,7 @@ export function RolesTab({ roles, roleExpectations }: RolesTabProps) {
                         <input
                           type="number"
                           value={bucketFs}
-                          onChange={(e) => setBucketFs(e.target.value)}
+                          onChange={(e) => setBucketFs(toNonNegativeNumber(e.target.value))}
                           style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
                         />
                       </label>
@@ -883,42 +1307,146 @@ export function RolesTab({ roles, roleExpectations }: RolesTabProps) {
                         <input
                           type="number"
                           value={bucketIps}
-                          onChange={(e) => setBucketIps(e.target.value)}
+                          onChange={(e) => setBucketIps(toNonNegativeNumber(e.target.value))}
                           style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
                         />
                       </label>
                     </div>
-                  ) : null}
+                  </div>
 
-                  {premiumMode === "LOB" ? (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {lobsError ? <div style={{ color: "#b91c1c", fontSize: 13 }}>{lobsError}</div> : null}
-                      {lobsLoading ? (
-                        <div style={{ color: "#6b7280", fontSize: 13 }}>Loading lines of business…</div>
-                      ) : (
-                        lobs.map((lob) => (
-                          <label key={lob.id} style={{ display: "grid", gap: 4, gridTemplateColumns: "1fr 180px", alignItems: "center" }}>
-                            <span style={{ fontWeight: 600 }}>
-                              {lob.name} {lob.premiumCategory ? <span style={{ color: "#6b7280", fontSize: 12 }}>({lob.premiumCategory})</span> : null}
-                            </span>
-                            <input
-                              type="number"
-                              value={lobInputs[lob.id] ?? ""}
-                              onChange={(e) =>
-                                setLobInputs((prev) => ({
-                                  ...prev,
-                                  [lob.id]: e.target.value,
-                                }))
-                              }
-                              placeholder="Premium"
-                              style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                            />
-                          </label>
-                        ))
-                      )}
-                      <div style={{ color: "#6b7280", fontSize: 12 }}>Enter at least one LoB premium to save.</div>
+                  <div
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 16,
+                      display: "grid",
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontWeight: 700 }}>Activity targets</div>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                        These are role defaults. People can override individually.
+                      </div>
                     </div>
-                  ) : null}
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {(() => {
+                        const availableTypes = activityTypes
+                          .filter((t) => t.active !== false)
+                          .sort((a, b) => a.name.localeCompare(b.name));
+                        const addedIds = Object.keys(activityTargetsByTypeInputs);
+                        const remainingTypes = availableTypes.filter((t) => !addedIds.includes(t.id));
+
+                        return (
+                          <>
+                            {addedIds.length === 0 ? (
+                              <div style={{ color: "#6b7280", fontSize: 13 }}>No activity targets yet.</div>
+                            ) : (
+                              addedIds.map((id) => {
+                                const activity = availableTypes.find((t) => t.id === id) || activityTypes.find((t) => t.id === id);
+                                return (
+                                  <div
+                                    key={id}
+                                    style={{
+                                      display: "grid",
+                                      gridTemplateColumns: "1fr 180px auto",
+                                      gap: 8,
+                                      alignItems: "center",
+                                      border: "1px solid #e5e7eb",
+                                      borderRadius: 10,
+                                      padding: 10,
+                                      background: "#f8fafc",
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 600 }}>{activity?.name || "Activity"}</div>
+                                    <input
+                                      type="number"
+                                      value={activityTargetsByTypeInputs[id] ?? 0}
+                                      onChange={(e) =>
+                                        setActivityTargetsByTypeInputs((prev) => ({
+                                          ...prev,
+                                          [id]: toNonNegativeInt(e.target.value),
+                                        }))
+                                      }
+                                      placeholder="Monthly target"
+                                      style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setActivityTargetsByTypeInputs((prev) => {
+                                          const next = { ...prev };
+                                          delete next[id];
+                                          return next;
+                                        })
+                                      }
+                                      style={{
+                                        padding: "8px 10px",
+                                        borderRadius: 8,
+                                        border: "1px solid #e5e7eb",
+                                        background: "#fff",
+                                        color: "#111827",
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                );
+                              })
+                            )}
+
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                              <button
+                                type="button"
+                                onClick={() => setActivityPickerOpen((prev) => !prev)}
+                                disabled={!remainingTypes.length}
+                                style={{
+                                  padding: "8px 12px",
+                                  borderRadius: 8,
+                                  border: "1px solid #111827",
+                                  background: "#111827",
+                                  color: "#fff",
+                                  fontWeight: 700,
+                                  opacity: remainingTypes.length ? 1 : 0.6,
+                                }}
+                              >
+                                + Add activity target
+                              </button>
+                              {!remainingTypes.length ? (
+                                <span style={{ color: "#6b7280", fontSize: 12 }}>All activity types added.</span>
+                              ) : null}
+                            </div>
+
+                            {activityPickerOpen ? (
+                              <select
+                                value={activityPickerValue}
+                                onChange={(e) => {
+                                  const nextId = e.target.value;
+                                  if (!nextId) return;
+                                  setActivityTargetsByTypeInputs((prev) => ({
+                                    ...prev,
+                                    [nextId]: prev[nextId] ?? 0,
+                                  }));
+                                  setActivityPickerValue("");
+                                  setActivityPickerOpen(false);
+                                }}
+                                style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", maxWidth: 320 }}
+                              >
+                                <option value="">Select activity</option>
+                                {remainingTypes.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : null}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
 
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <button

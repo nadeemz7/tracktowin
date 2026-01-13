@@ -506,6 +506,7 @@ model CompPlanVersion {
   effectiveStartMonth String?
   createdAt           DateTime              @default(now())
   isCurrent           Boolean               @default(true)
+  config              Json?                 @db.JsonB
   bonusModules        CompPlanBonusModule[]
   gates               CompPlanGate[]
   ruleBlocks          CompPlanRuleBlock[]

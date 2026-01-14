@@ -15,9 +15,6 @@ model Agency {
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
   activityTypes             ActivityType[]
-  activityRecords           ActivityRecord[]
-  activityEvents            ActivityEvent[]
-  activityTargets           ActivityTarget[]
   commissionPlans           CommissionPlan[]
   compPlans                 CompPlan[]
   households                Household[]
@@ -25,12 +22,9 @@ model Agency {
   linesOfBusiness           LineOfBusiness[]
   marketingSourceOptions    MarketingSourceOption[]
   peoplePrimary             Person[]                   @relation("PrimaryAgency")
-  memberships               PersonAgencyMembership[]
   premiumBuckets            PremiumBucket[]
   productionExpectations    ProductionExpectation[]
-  compMonthlyResults        CompMonthlyResult[]
   reportPresets             ReportPreset[]
-  reportSnapshots           ReportSnapshot[]
   benchOfficePlans          BenchOfficePlan[]
   soldProducts              SoldProduct[]
   teams                     Team[]
@@ -117,16 +111,13 @@ model ActivityRecord {
   id           String   @id @default(cuid())
   personName   String?
   personId     String?
-  agencyId     String?
   activityDate DateTime
   activityName String
   count        Int
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-  agency       Agency?  @relation(fields: [agencyId], references: [id], onDelete: SetNull)
   person       Person?  @relation(fields: [personId], references: [id], onDelete: SetNull)
 
-  @@index([agencyId, activityDate])
   @@index([personName, activityDate])
   @@index([personId, activityDate])
 }
@@ -135,15 +126,12 @@ model ActivityEvent {
   id             String       @id @default(cuid())
   activityTypeId String
   personId       String
-  agencyId       String
   occurredAt     DateTime
   meta           Json?
   createdAt      DateTime     @default(now())
   activityType   ActivityType @relation(fields: [activityTypeId], references: [id], onDelete: Cascade)
-  agency         Agency       @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   person         Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
 
-  @@index([agencyId, occurredAt])
   @@index([activityTypeId, occurredAt])
   @@index([personId, occurredAt])
 }
@@ -152,16 +140,13 @@ model ActivityTarget {
   id             String       @id @default(cuid())
   activityTypeId String
   personId       String
-  agencyId       String
   monthlyMinimum Int          @default(0)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   activityType   ActivityType @relation(fields: [activityTypeId], references: [id], onDelete: Cascade)
-  agency         Agency       @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   person         Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
 
-  @@index([agencyId])
-  @@unique([agencyId, activityTypeId, personId])
+  @@unique([activityTypeId, personId])
   @@index([personId])
 }
 
@@ -184,7 +169,6 @@ model Person {
   createdActivityTypes ActivityType[]
   commissionPlans      CommissionPlan[]
   planAssignments      CommissionPlanAssignment[]
-  memberships          PersonAgencyMembership[]
   primaryAgency        Agency?                        @relation("PrimaryAgency", fields: [primaryAgencyId], references: [id], onDelete: SetNull)
   role                 Role?                          @relation(fields: [roleId], references: [id], onDelete: SetNull)
   team                 Team?                          @relation(fields: [teamId], references: [id], onDelete: SetNull)
@@ -195,20 +179,6 @@ model Person {
   benchOverride        BenchPersonOverride?
 }
 
-model PersonAgencyMembership {
-  id        String   @id @default(cuid())
-  personId  String
-  agencyId  String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  person    Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
-  agency    Agency   @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-
-  @@unique([personId, agencyId])
-  @@index([personId])
-  @@index([agencyId])
-}
 
 model MarketingSourceOption {
   id        String   @id @default(cuid())

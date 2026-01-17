@@ -100,26 +100,26 @@ function sumPremium(bucket: PremiumByBucket) {
 }
 
 async function deriveAnyOrgId(): Promise<{ orgId: string | null; source: string | null }> {
-  const a = await prisma.agency.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
-  if (a?.id) return { orgId: a.id, source: "agency" };
+  const a = await prisma.agency.findFirst({ orderBy: { createdAt: "asc" }, select: { orgId: true } });
+  if (a?.orgId) return { orgId: a.orgId, source: "agency" };
 
   const lob = await prisma.lineOfBusiness.findFirst({
     orderBy: { createdAt: "asc" },
-    select: { agencyId: true },
+    select: { agency: { select: { orgId: true } } },
   });
-  if (lob?.agencyId) return { orgId: lob.agencyId, source: "lob" };
+  if (lob?.agency?.orgId) return { orgId: lob.agency.orgId, source: "lob" };
 
   const team = await prisma.team.findFirst({
     orderBy: { createdAt: "asc" },
-    select: { agencyId: true },
+    select: { orgId: true },
   });
-  if (team?.agencyId) return { orgId: team.agencyId, source: "team" };
+  if (team?.orgId) return { orgId: team.orgId, source: "team" };
 
   const plan = await prisma.benchOfficePlan.findFirst({
     orderBy: { createdAt: "asc" },
-    select: { agencyId: true },
+    select: { agency: { select: { orgId: true } } },
   });
-  if (plan?.agencyId) return { orgId: plan.agencyId, source: "officePlan" };
+  if (plan?.agency?.orgId) return { orgId: plan.agency.orgId, source: "officePlan" };
 
   return { orgId: null, source: null };
 }
@@ -141,11 +141,7 @@ async function getDevFallbackViewer() {
       include: { primaryAgency: true, role: true, team: true },
     }));
 
-  let orgId: string | null =
-    person?.primaryAgency?.id ||
-    person?.primaryAgencyId ||
-    person?.team?.agencyId ||
-    null;
+  let orgId: string | null = person?.orgId || person?.primaryAgency?.orgId || null;
 
   let source: string | null = orgId ? "person" : null;
 

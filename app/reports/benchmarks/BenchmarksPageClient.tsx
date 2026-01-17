@@ -287,6 +287,7 @@ type BenchmarksReportViewProps = {
   statuses: string[];
   comparePayload?: ReportResponse | null;
   readOnly?: boolean;
+  canViewPeopleBenchmarks?: boolean;
 };
 
 export function BenchmarksReportView({
@@ -296,12 +297,14 @@ export function BenchmarksReportView({
   statuses,
   comparePayload = null,
   readOnly = false,
+  canViewPeopleBenchmarks = true,
 }: BenchmarksReportViewProps) {
   const startParsed = parseISODate(startISO);
   const endParsed = parseISODate(endISO);
   const rangeStart = startParsed ?? new Date();
   const rangeEnd = endParsed ?? rangeStart;
   const hasValidRange = Boolean(startParsed && endParsed);
+  const showPeopleBenchmarks = Boolean(canViewPeopleBenchmarks);
 
   const office = payload?.office;
   const breakdown = payload?.breakdown;
@@ -399,7 +402,7 @@ export function BenchmarksReportView({
       </div>
     );
   }
-  if (people.length === 0) {
+  if (showPeopleBenchmarks && people.length === 0) {
     ctaSurfaces.push(
       <div key="cta-people" className="surface" style={{ padding: 12 }}>
         <div style={{ fontWeight: 800, marginBottom: 4 }}>No people with expectations</div>
@@ -451,8 +454,9 @@ export function BenchmarksReportView({
   }
 
   const hasMissingExpectations =
-    people.length === 0 ||
-    people.some((p) => !p.roleName || !Number.isFinite(p.appsTarget) || !Number.isFinite(p.premiumTarget));
+    showPeopleBenchmarks &&
+    (people.length === 0 ||
+      people.some((p) => !p.roleName || !Number.isFinite(p.appsTarget) || !Number.isFinite(p.premiumTarget)));
   if (hasMissingExpectations) {
     addWarning(
       "missing-expectations",
@@ -641,124 +645,134 @@ export function BenchmarksReportView({
         </div>
       ) : null}
 
-      {!hasPeopleRows ? (
-        <div className="surface" style={{ padding: 12 }}>
-          <div style={{ fontWeight: 800, marginBottom: 4 }}>No people with expectations</div>
-          <div style={{ color: "#6b7280", marginBottom: 8 }}>
-            Set role defaults or person overrides to include people in Benchmarks.
+      {showPeopleBenchmarks ? (
+        !hasPeopleRows ? (
+          <div className="surface" style={{ padding: 12 }}>
+            <div style={{ fontWeight: 800, marginBottom: 4 }}>No people with expectations</div>
+            <div style={{ color: "#6b7280", marginBottom: 8 }}>
+              Set role defaults or person overrides to include people in Benchmarks.
+            </div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <a href="/people?tab=roles" style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}>
+                Go to Role Defaults
+              </a>
+              <a href="/people?tab=people" style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}>
+                Go to People
+              </a>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <a href="/people?tab=roles" style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}>
-              Go to Role Defaults
-            </a>
-            <a href="/people?tab=people" style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}>
-              Go to People
-            </a>
-          </div>
-        </div>
-      ) : (
-        <div className="surface" style={{ padding: 12 }}>
-          <div style={{ fontWeight: 800, marginBottom: 8 }}>People</div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
-                  <th style={{ padding: 8 }}>Person</th>
-                  <th style={{ padding: 8 }}>Role</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Apps Actual</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Prorated Apps Target</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Premium Actual</th>
-                  {hasCompare ? (
-                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Δ Premium Actual</th>
-                  ) : null}
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Prorated Premium Target</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Delta</th>
-                  <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Pace (to-date)</th>
-                  <th style={{ padding: 8 }}>Expectation Source</th>
-                  {!readOnly ? <th style={{ padding: 8 }}>Actions</th> : null}
-                </tr>
-              </thead>
-              <tbody>
-                {peopleRows.map((entry) => {
-                  const currentRow = entry.current;
-                  const compareRow = entry.compare;
-                  const personId = entry.personId;
-                  const displayName = currentRow?.name ?? compareRow?.name ?? "—";
-                  const roleName = currentRow?.roleName ?? compareRow?.roleName ?? "—";
-                  const appsActual = currentRow?.appsActual ?? 0;
-                  const appsTarget = currentRow?.appsTarget;
-                  const premiumActual = currentRow?.premiumActual ?? 0;
-                  const premiumTarget = currentRow?.premiumTarget;
-                  const premiumExpected = hasValidRange ? expectedToDate(premiumTarget ?? null, rangeStart, rangeEnd) : null;
-                  const premiumPace =
-                    premiumExpected != null && premiumExpected > 0
-                      ? Number.isFinite(currentRow?.pacePremium ?? NaN)
-                        ? currentRow?.pacePremium
-                        : pace(premiumActual, premiumExpected)
-                      : null;
-                  const premiumActualDelta = hasCompare ? moneyDelta(premiumActual, compareRow?.premiumActual ?? 0) : "—";
-                  const expectationSource = currentRow?.expectationSource;
-                  const expectationLabel = expectationSource
-                    ? expectationSource === "override"
-                      ? "Override"
-                      : "Role default"
-                    : "—";
-                  return (
-                    <tr key={personId} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                      <td style={{ padding: 8 }}>
-                        <a
-                          href={`/sold-products?soldByPersonId=${encodeURIComponent(personId)}&dateFrom=${startISO}&dateTo=${endISO}&statuses=${encodeURIComponent(drilldownStatuses.join(","))}`}
-                          style={{ color: "#111827", textDecoration: "none" }}
-                        >
-                          {displayName}
-                        </a>
-                      </td>
-                      <td style={{ padding: 8 }}>{roleName}</td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtInt(appsActual)}</td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtInt(appsTarget)}</td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtMoney(premiumActual)}
-                      </td>
-                      {hasCompare ? (
-                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
-                          {premiumActualDelta}
-                        </td>
-                      ) : null}
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtMoney(premiumTarget)}
-                      </td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtMoney(currentRow?.premiumDelta)}
-                      </td>
-                      <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtPct(premiumPace)}</td>
-                      <td style={{ padding: 8 }}>{expectationLabel}</td>
-                      {!readOnly ? (
+        ) : (
+          <div className="surface" style={{ padding: 12 }}>
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>People</div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
+                    <th style={{ padding: 8 }}>Person</th>
+                    <th style={{ padding: 8 }}>Role</th>
+                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Apps Actual</th>
+                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Prorated Apps Target</th>
+                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Premium Actual</th>
+                    {hasCompare ? (
+                      <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Δ Premium Actual</th>
+                    ) : null}
+                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Prorated Premium Target</th>
+                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Delta</th>
+                    <th style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>Pace (to-date)</th>
+                    <th style={{ padding: 8 }}>Expectation Source</th>
+                    {!readOnly ? <th style={{ padding: 8 }}>Actions</th> : null}
+                  </tr>
+                </thead>
+                <tbody>
+                  {peopleRows.map((entry) => {
+                    const currentRow = entry.current;
+                    const compareRow = entry.compare;
+                    const personId = entry.personId;
+                    const displayName = currentRow?.name ?? compareRow?.name ?? "—";
+                    const roleName = currentRow?.roleName ?? compareRow?.roleName ?? "—";
+                    const appsActual = currentRow?.appsActual ?? 0;
+                    const appsTarget = currentRow?.appsTarget;
+                    const premiumActual = currentRow?.premiumActual ?? 0;
+                    const premiumTarget = currentRow?.premiumTarget;
+                    const premiumExpected = hasValidRange ? expectedToDate(premiumTarget ?? null, rangeStart, rangeEnd) : null;
+                    const premiumPace =
+                      premiumExpected != null && premiumExpected > 0
+                        ? Number.isFinite(currentRow?.pacePremium ?? NaN)
+                          ? currentRow?.pacePremium
+                          : pace(premiumActual, premiumExpected)
+                        : null;
+                    const premiumActualDelta = hasCompare ? moneyDelta(premiumActual, compareRow?.premiumActual ?? 0) : "—";
+                    const expectationSource = currentRow?.expectationSource;
+                    const expectationLabel = expectationSource
+                      ? expectationSource === "override"
+                        ? "Override"
+                        : "Role default"
+                      : "—";
+                    return (
+                      <tr key={personId} style={{ borderBottom: "1px solid #f3f4f6" }}>
                         <td style={{ padding: 8 }}>
-                          {currentRow ? (
-                            <a
-                              href={`/people?tab=people&personId=${encodeURIComponent(personId)}`}
-                              style={{ color: "#2563eb", textDecoration: "none" }}
-                            >
-                              Edit
-                            </a>
-                          ) : (
-                            <span style={{ color: "#6b7280" }}>—</span>
-                          )}
+                          <a
+                            href={`/sold-products?soldByPersonId=${encodeURIComponent(personId)}&dateFrom=${startISO}&dateTo=${endISO}&statuses=${encodeURIComponent(drilldownStatuses.join(","))}`}
+                            style={{ color: "#111827", textDecoration: "none" }}
+                          >
+                            {displayName}
+                          </a>
                         </td>
-                      ) : null}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        <td style={{ padding: 8 }}>{roleName}</td>
+                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtInt(appsActual)}</td>
+                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtInt(appsTarget)}</td>
+                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                          {fmtMoney(premiumActual)}
+                        </td>
+                        {hasCompare ? (
+                          <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                            {premiumActualDelta}
+                          </td>
+                        ) : null}
+                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                          {fmtMoney(premiumTarget)}
+                        </td>
+                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>
+                          {fmtMoney(currentRow?.premiumDelta)}
+                        </td>
+                        <td style={{ padding: 8, textAlign: "right", whiteSpace: "nowrap" }}>{fmtPct(premiumPace)}</td>
+                        <td style={{ padding: 8 }}>{expectationLabel}</td>
+                        {!readOnly ? (
+                          <td style={{ padding: 8 }}>
+                            {currentRow ? (
+                              <a
+                                href={`/people?tab=people&personId=${encodeURIComponent(personId)}`}
+                                style={{ color: "#2563eb", textDecoration: "none" }}
+                              >
+                                Edit
+                              </a>
+                            ) : (
+                              <span style={{ color: "#6b7280" }}>—</span>
+                            )}
+                          </td>
+                        ) : null}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
+        )
+      ) : (
+        <div className="surface" style={{ padding: 12, color: "#6b7280" }}>
+          Manager-only: You don't have access to view individual benchmarks.
         </div>
       )}
     </>
   );
 }
 
-function BenchmarksPageClientInner() {
+type BenchmarksPageClientProps = {
+  canViewPeopleBenchmarks: boolean;
+};
+
+function BenchmarksPageClientInner({ canViewPeopleBenchmarks }: BenchmarksPageClientProps) {
   const { start, end, statuses, setRange, setStatuses, allStatuses } = useBenchmarksFilters();
   const router = useRouter();
   const [data, setData] = useState<ReportResponse | null>(null);
@@ -1605,9 +1619,11 @@ function BenchmarksPageClientInner() {
         <a href="/people?tab=roles" className="btn" style={{ padding: "8px 12px", textDecoration: "none" }}>
           Edit Role Defaults
         </a>
-        <a href="/people?tab=people" className="btn" style={{ padding: "8px 12px", textDecoration: "none" }}>
-          Edit People
-        </a>
+        {canViewPeopleBenchmarks ? (
+          <a href="/people?tab=people" className="btn" style={{ padding: "8px 12px", textDecoration: "none" }}>
+            Edit People
+          </a>
+        ) : null}
         <button
           type="button"
           className="btn"
@@ -1783,6 +1799,7 @@ function BenchmarksPageClientInner() {
         statuses={statuses}
         comparePayload={compareSnapshot?.payload ?? null}
         readOnly={false}
+        canViewPeopleBenchmarks={canViewPeopleBenchmarks}
       />
     </>
   );
@@ -2138,58 +2155,60 @@ function BenchmarksPageClientInner() {
               })}
             </div>
           </div>
-          <div>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>People</div>
-            <select
-              value=""
-              onChange={(e) => {
-                const nextId = e.target.value;
-                if (!nextId) return;
-                setExplorerPeopleIds((prev) => (prev.includes(nextId) ? prev : [...prev, nextId]));
-              }}
-              style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", width: "100%" }}
-            >
-              <option value="">Add person…</option>
-              {peopleOptions
-                .filter((person) => !explorerPeopleIds.includes(person.id))
-                .map((person) => (
-                  <option key={person.id} value={person.id}>
-                    {person.name}
-                  </option>
-                ))}
-            </select>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-              {explorerPeopleIds.length ? (
-                explorerPeopleIds.map((id) => (
-                  <span
-                    key={id}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "4px 8px",
-                      borderRadius: 999,
-                      background: "#f3f4f6",
-                      border: "1px solid #e5e7eb",
-                      fontSize: 12,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {peopleNameById.get(id) || id}
-                    <button
-                      type="button"
-                      onClick={() => setExplorerPeopleIds((prev) => prev.filter((pid) => pid !== id))}
-                      style={{ border: "none", background: "transparent", cursor: "pointer", fontWeight: 700 }}
+          {canViewPeopleBenchmarks ? (
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>People</div>
+              <select
+                value=""
+                onChange={(e) => {
+                  const nextId = e.target.value;
+                  if (!nextId) return;
+                  setExplorerPeopleIds((prev) => (prev.includes(nextId) ? prev : [...prev, nextId]));
+                }}
+                style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", width: "100%" }}
+              >
+                <option value="">Add person…</option>
+                {peopleOptions
+                  .filter((person) => !explorerPeopleIds.includes(person.id))
+                  .map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.name}
+                    </option>
+                  ))}
+              </select>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                {explorerPeopleIds.length ? (
+                  explorerPeopleIds.map((id) => (
+                    <span
+                      key={id}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "4px 8px",
+                        borderRadius: 999,
+                        background: "#f3f4f6",
+                        border: "1px solid #e5e7eb",
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
                     >
-                      ×
-                    </button>
-                  </span>
-                ))
-              ) : (
-                <span style={{ fontSize: 12, color: "#6b7280" }}>All people</span>
-              )}
+                      {peopleNameById.get(id) || id}
+                      <button
+                        type="button"
+                        onClick={() => setExplorerPeopleIds((prev) => prev.filter((pid) => pid !== id))}
+                        style={{ border: "none", background: "transparent", cursor: "pointer", fontWeight: 700 }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))
+                ) : (
+                  <span style={{ fontSize: 12, color: "#6b7280" }}>All people</span>
+                )}
+              </div>
             </div>
-          </div>
+          ) : null}
           <div>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Lines of Business</div>
             <select
@@ -2513,83 +2532,91 @@ function BenchmarksPageClientInner() {
             </div>
           </Section>
 
-          <Section title="People">
-            <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 8 }}>
-              {explorerShowTargets
-                ? "Sorted by variance (most behind first)."
-                : "Sorted by premium actual (highest first)."}
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
-                    <th style={{ padding: 6 }}>Person</th>
-                    <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Apps Actual</th>
-                    {explorerShowTargets ? (
-                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Apps Target</th>
-                    ) : null}
-                    <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Premium Actual</th>
-                    {explorerShowTargets ? (
-                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Premium Target</th>
-                    ) : null}
-                    {explorerShowTargets ? <th style={{ padding: 6 }}>Status</th> : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {explorerPeopleRows.map((person) => {
-                    const onTrackPct =
-                      person.premiumTarget > 0 ? person.premiumActual / person.premiumTarget : null;
-                    return (
-                      <tr key={person.personId} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                        <td style={{ padding: 6 }}>{person.name}</td>
-                        <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                          {fmtInt(person.appsActual)}
-                        </td>
-                        {explorerShowTargets ? (
+          {canViewPeopleBenchmarks ? (
+            <Section title="People">
+              <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 8 }}>
+                {explorerShowTargets
+                  ? "Sorted by variance (most behind first)."
+                  : "Sorted by premium actual (highest first)."}
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
+                      <th style={{ padding: 6 }}>Person</th>
+                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Apps Actual</th>
+                      {explorerShowTargets ? (
+                        <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Apps Target</th>
+                      ) : null}
+                      <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Premium Actual</th>
+                      {explorerShowTargets ? (
+                        <th style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>Premium Target</th>
+                      ) : null}
+                      {explorerShowTargets ? <th style={{ padding: 6 }}>Status</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {explorerPeopleRows.map((person) => {
+                      const onTrackPct =
+                        person.premiumTarget > 0 ? person.premiumActual / person.premiumTarget : null;
+                      return (
+                        <tr key={person.personId} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                          <td style={{ padding: 6 }}>{person.name}</td>
                           <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                            {fmtInt(person.appsTarget)}
+                            {fmtInt(person.appsActual)}
                           </td>
-                        ) : null}
-                        <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                          {fmtMoney(person.premiumActual)}
-                        </td>
-                        {explorerShowTargets ? (
+                          {explorerShowTargets ? (
+                            <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                              {fmtInt(person.appsTarget)}
+                            </td>
+                          ) : null}
                           <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                            {fmtMoney(person.premiumTarget)}
+                            {fmtMoney(person.premiumActual)}
                           </td>
-                        ) : null}
-                        {explorerShowTargets ? (
-                          <td style={{ padding: 6 }}>
-                            {renderStatusChip(onTrackPct)}
-                          </td>
-                        ) : null}
-                      </tr>
-                    );
-                  })}
-                  <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700 }}>
-                    <td style={{ padding: 6 }}>Total</td>
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {fmtInt(explorerPeopleTotals.appsActual)}
-                    </td>
-                    {explorerShowTargets ? (
+                          {explorerShowTargets ? (
+                            <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                              {fmtMoney(person.premiumTarget)}
+                            </td>
+                          ) : null}
+                          {explorerShowTargets ? (
+                            <td style={{ padding: 6 }}>
+                              {renderStatusChip(onTrackPct)}
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })}
+                    <tr style={{ borderTop: "2px solid #e5e7eb", fontWeight: 700 }}>
+                      <td style={{ padding: 6 }}>Total</td>
                       <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtInt(explorerPeopleTotals.appsTarget)}
+                        {fmtInt(explorerPeopleTotals.appsActual)}
                       </td>
-                    ) : null}
-                    <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {fmtMoney(explorerPeopleTotals.premiumActual)}
-                    </td>
-                    {explorerShowTargets ? (
+                      {explorerShowTargets ? (
+                        <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                          {fmtInt(explorerPeopleTotals.appsTarget)}
+                        </td>
+                      ) : null}
                       <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtMoney(explorerPeopleTotals.premiumTarget)}
+                        {fmtMoney(explorerPeopleTotals.premiumActual)}
                       </td>
-                    ) : null}
-                    {explorerShowTargets ? <td style={{ padding: 6, color: "#6b7280" }}>—</td> : null}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </Section>
+                      {explorerShowTargets ? (
+                        <td style={{ padding: 6, textAlign: "right", whiteSpace: "nowrap" }}>
+                          {fmtMoney(explorerPeopleTotals.premiumTarget)}
+                        </td>
+                      ) : null}
+                      {explorerShowTargets ? <td style={{ padding: 6, color: "#6b7280" }}>—</td> : null}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </Section>
+          ) : (
+            <Section title="People">
+              <div style={{ color: "#6b7280" }}>
+                Manager-only: You don't have access to view individual benchmarks.
+              </div>
+            </Section>
+          )}
         </div>
       ) : null}
     </>
@@ -2614,10 +2641,10 @@ function BenchmarksPageClientInner() {
   );
 }
 
-export default function BenchmarksPageClient() {
+export default function BenchmarksPageClient({ canViewPeopleBenchmarks }: BenchmarksPageClientProps) {
   return (
     <ErrorBoundary>
-      <BenchmarksPageClientInner />
+      <BenchmarksPageClientInner canViewPeopleBenchmarks={canViewPeopleBenchmarks} />
     </ErrorBoundary>
   );
 }

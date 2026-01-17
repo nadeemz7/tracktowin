@@ -68,7 +68,7 @@ export default async function AdminIndexPage({ searchParams }: { searchParams?: 
         }
       : impersonatedAgencyFilter,
     orderBy: { name: "asc" },
-    include: { linesOfBusiness: true, teams: true, peoplePrimary: true },
+    include: { linesOfBusiness: true, peoplePrimary: true },
   });
 
   return (
@@ -104,8 +104,8 @@ export default async function AdminIndexPage({ searchParams }: { searchParams?: 
               <div>
                 <div style={{ fontWeight: 800, fontSize: 16 }}>{a.name}</div>
                 <div style={{ color: "#475569", fontSize: 13 }}>
-                  Owner: {a.ownerName || "—"} • Profile: {a.profileName || "—"} • LoBs: {a.linesOfBusiness.length} • Teams:{" "}
-                  {a.teams.length} • People: {a.peoplePrimary.length}
+                  Owner: {a.ownerName || "—"} • Profile: {a.profileName || "—"} • LoBs: {a.linesOfBusiness.length} • People:{" "}
+                  {a.peoplePrimary.length}
                 </div>
               </div>
               <Link href={`/agencies/${a.id}`} className="btn primary" style={{ textDecoration: "none", padding: "8px 12px" }}>

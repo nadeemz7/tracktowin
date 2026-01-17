@@ -16,9 +16,9 @@ const DEFAULT_ACTIVITY_CONFIG = [
   { name: "Reviews", unitLabel: "reviews", salesAvailable: true, csAvailable: true },
 ];
 
-async function ensureDefaultTeams(agencyId: string): Promise<TeamMap> {
+async function ensureDefaultTeams(orgId: string): Promise<TeamMap> {
   const existing = await prisma.team.findMany({
-    where: { agencyId, name: { in: ["Sales", "Customer Service"] } },
+    where: { orgId, name: { in: ["Sales", "Customer Service"] } },
   });
 
   const map: TeamMap = {};
@@ -28,12 +28,12 @@ async function ensureDefaultTeams(agencyId: string): Promise<TeamMap> {
   }
 
   if (!map.sales) {
-    const created = await prisma.team.create({ data: { agencyId, name: "Sales" } });
+    const created = await prisma.team.create({ data: { orgId, name: "Sales" } });
     map.sales = { id: created.id };
   }
 
   if (!map.cs) {
-    const created = await prisma.team.create({ data: { agencyId, name: "Customer Service" } });
+    const created = await prisma.team.create({ data: { orgId, name: "Customer Service" } });
     map.cs = { id: created.id };
   }
 
@@ -115,8 +115,8 @@ async function ensureDefaultActivities(agencyId: string, teams: TeamMap) {
   }
 }
 
-async function ensureDefaultWinTheDayPlans(agencyId: string) {
-  const teams = await ensureDefaultTeams(agencyId);
+async function ensureDefaultWinTheDayPlans(agencyId: string, orgId: string) {
+  const teams = await ensureDefaultTeams(orgId);
   await ensureDefaultActivities(agencyId, teams);
 
   const activityLookup = await prisma.activityType.findMany({
@@ -184,16 +184,16 @@ async function ensureDefaultWinTheDayPlans(agencyId: string) {
 }
 
 async function backfillAgencyDefaults() {
-  const agencies = await prisma.agency.findMany({ select: { id: true, name: true } });
+  const agencies = await prisma.agency.findMany({ select: { id: true, name: true, orgId: true } });
 
   let createdActivities = 0;
   let createdPlans = 0;
   let createdTeams = 0;
 
   for (const agency of agencies) {
-    const teamsBefore = await prisma.team.count({ where: { agencyId: agency.id } });
-    const teams = await ensureDefaultTeams(agency.id);
-    const teamsAfter = await prisma.team.count({ where: { agencyId: agency.id } });
+    const teamsBefore = await prisma.team.count({ where: { orgId: agency.orgId } });
+    const teams = await ensureDefaultTeams(agency.orgId);
+    const teamsAfter = await prisma.team.count({ where: { orgId: agency.orgId } });
     createdTeams += teamsAfter - teamsBefore;
 
     const activityCountBefore = await prisma.activityType.count({ where: { agencyId: agency.id } });
@@ -202,7 +202,7 @@ async function backfillAgencyDefaults() {
     createdActivities += activityCountAfter - activityCountBefore;
 
     const planCountBefore = await prisma.winTheDayPlan.count({ where: { agencyId: agency.id } });
-    await ensureDefaultWinTheDayPlans(agency.id);
+    await ensureDefaultWinTheDayPlans(agency.id, agency.orgId);
     const planCountAfter = await prisma.winTheDayPlan.count({ where: { agencyId: agency.id } });
     createdPlans += planCountAfter - planCountBefore;
   }

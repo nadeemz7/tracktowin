@@ -16,7 +16,7 @@ export async function GET(req: Request) {
     }
 
     const expectations = await prisma.benchRoleExpectation.findMany({
-      where: { role: { team: { agencyId: viewer.orgId } } },
+      where: { role: { team: { orgId: viewer.orgId } } },
     });
 
     return NextResponse.json({ expectations });
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     }
 
     const role = await prisma.role.findUnique({ where: { id: roleId }, include: { team: true } });
-    if (!role || role.team?.agencyId !== viewer.orgId) {
+    if (!role || role.team?.orgId !== viewer.orgId) {
       return NextResponse.json({ error: "Role not found in org" }, { status: 404 });
     }
 
@@ -133,7 +133,7 @@ export async function DELETE(req: Request) {
     if (!roleId) return NextResponse.json({ error: "roleId is required" }, { status: 400 });
 
     const role = await prisma.role.findUnique({ where: { id: roleId }, include: { team: true } });
-    if (!role || role.team?.agencyId !== viewer.orgId) {
+    if (!role || role.team?.orgId !== viewer.orgId) {
       return NextResponse.json({ error: "Role not found in org" }, { status: 404 });
     }
 

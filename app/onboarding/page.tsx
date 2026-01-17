@@ -7,7 +7,7 @@ import { ensureDefaultWinTheDayPlans } from "@/lib/wtdDefaults";
 import OnboardingWizard from "./OnboardingWizard";
 
 async function createFromPayload(payload: OnboardingPayload) {
-  const createdAgencies: { name: string; id: string }[] = [];
+  const createdAgencies: { name: string; id: string; orgId: string }[] = [];
   const ownerName = payload.ownerName?.trim() || "";
   if (!ownerName) {
     throw new Error("Owner name is required.");
@@ -46,7 +46,7 @@ async function createFromPayload(payload: OnboardingPayload) {
         },
       },
     });
-    createdAgencies.push({ name: office.name, id: agency.id });
+    createdAgencies.push({ name: office.name, id: agency.id, orgId: agency.orgId });
   }
 
   const ownerPrimaryAgencyId = createdAgencies[0]?.id ?? null;
@@ -63,7 +63,7 @@ async function createFromPayload(payload: OnboardingPayload) {
     }));
 
     const teams = await prisma.team.createManyAndReturn({
-      data: teamCreates.map((t) => ({ agencyId: agency.id, name: t.name })),
+      data: teamCreates.map((t) => ({ orgId: agency.orgId, name: t.name })),
     });
 
     const rolesByTeam = new Map<string, { id: string; name: string }[]>();
@@ -170,7 +170,7 @@ export default function OnboardingPage({ searchParams }: { searchParams?: { succ
     for (const office of payload.offices) {
       const agency = await prisma.agency.findFirst({ where: { name: office.name } });
       if (agency) {
-        await ensureDefaultWinTheDayPlans(agency.id);
+        await ensureDefaultWinTheDayPlans(agency.id, agency.orgId);
       }
     }
   }

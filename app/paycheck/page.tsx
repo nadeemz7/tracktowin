@@ -2,8 +2,8 @@
 import React from "react";
 import { AppShell } from "@/app/components/AppShell";
 import { AutoSubmit } from "@/app/sold-products/AutoSubmit";
+import { getOrgViewer } from "@/lib/getOrgViewer";
 import { prisma } from "@/lib/prisma";
-import { readCookie } from "@/lib/readCookie";
 import {
   CompAssignmentScope,
   CompApplyScope,
@@ -40,9 +40,32 @@ type Metrics = {
 type BucketById = Record<string, { includesProducts: string[]; includesLobs: string[] }>;
 
 async function resolvePlanForPerson(
-  person: { id: string; roleId: string | null; teamId: string | null; teamType: any; primaryAgencyId: string | null },
-  monthKey: string
+  person: { id: string; roleId: string | null; teamId: string | null; teamType: any; primaryAgencyId: string | null; orgId: string | null },
+  monthKey: string,
+  viewerOrgId: string | null
 ): Promise<ResolvedPlan | null> {
+  if (!viewerOrgId) return null;
+
+  const personInOrg = person.orgId === viewerOrgId;
+  const roleInOrg = person.roleId
+    ? await prisma.role.findFirst({
+        where: { id: person.roleId, team: { orgId: viewerOrgId } },
+        select: { id: true },
+      })
+    : null;
+  const teamInOrg = person.teamId
+    ? await prisma.team.findFirst({
+        where: { id: person.teamId, orgId: viewerOrgId },
+        select: { id: true },
+      })
+    : null;
+  const agencyInOrg = person.primaryAgencyId
+    ? await prisma.agency.findFirst({
+        where: { id: person.primaryAgencyId, orgId: viewerOrgId },
+        select: { id: true },
+      })
+    : null;
+
   const scopes: { type: CompAssignmentScope; id?: string | null }[] = [
     { type: CompAssignmentScope.PERSON, id: person.id },
     { type: CompAssignmentScope.ROLE, id: person.roleId },
@@ -52,6 +75,12 @@ async function resolvePlanForPerson(
 
   for (const scope of scopes) {
     if (!scope.id && scope.type !== CompAssignmentScope.AGENCY) continue;
+    const scopeAllowed =
+      (scope.type === CompAssignmentScope.PERSON && personInOrg) ||
+      (scope.type === CompAssignmentScope.ROLE && Boolean(roleInOrg)) ||
+      (scope.type === CompAssignmentScope.TEAM && Boolean(teamInOrg)) ||
+      (scope.type === CompAssignmentScope.AGENCY && Boolean(agencyInOrg));
+    if (!scopeAllowed) continue;
     const assignment = await prisma.compPlanAssignment.findFirst({
       where: {
         active: true,
@@ -595,42 +624,58 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
   const monthIdx = typeof sp.month === "string" ? parseInt(sp.month, 10) : today.getMonth();
   const year = typeof sp.year === "string" ? parseInt(sp.year, 10) : today.getFullYear();
   const applyWritten = sp.written === "1";
-  const personId = typeof sp.person === "string" ? sp.person : "";
+  const requestedPersonId = typeof sp.person === "string" ? sp.person : "";
 
   const startDate = startOfMonth(new Date(year, monthIdx, 1));
   const endDate = endOfMonth(startDate);
 
-  const cookiePersonId = (await readCookie("impersonatePersonId")) || "";
+  const viewer: any = await getOrgViewer();
+  const viewerPersonId = viewer?.personId || "";
+  const viewerOrgId = viewer?.orgId || null;
+  const permissions = viewer?.permissions ?? [];
+  const canViewOtherPaychecks = Boolean(
+    viewer?.isTtwAdmin ||
+      viewer?.isOwner ||
+      viewer?.isAdmin ||
+      permissions.includes("EDIT_PAYCHECKS") ||
+      permissions.includes("VIEW_ORG")
+  );
 
-  let people = await prisma.person.findMany({ orderBy: { fullName: "asc" } });
-  if (cookiePersonId && !people.some((p) => p.id === cookiePersonId)) {
-    const cookiePerson = await prisma.person.findUnique({ where: { id: cookiePersonId } });
-    if (cookiePerson) {
-      people = [...people, cookiePerson].sort((a, b) => a.fullName.localeCompare(b.fullName));
-    }
+  const orgPeople = viewerOrgId
+    ? await prisma.person.findMany({ where: { orgId: viewerOrgId }, orderBy: { fullName: "asc" } })
+    : [];
+  const orgPersonIds = new Set(orgPeople.map((p) => p.id));
+
+  let people = orgPeople;
+  let selectedPersonId = "";
+  if (canViewOtherPaychecks) {
+    const requestedInOrg = requestedPersonId && orgPersonIds.has(requestedPersonId);
+    selectedPersonId =
+      (requestedInOrg ? requestedPersonId : "") || viewerPersonId || orgPeople[0]?.id || "";
+  } else {
+    selectedPersonId = viewerPersonId || orgPeople[0]?.id || "";
+    people = viewerPersonId ? orgPeople.filter((p) => p.id === viewerPersonId) : [];
   }
 
-  const selectedPersonId = personId || cookiePersonId || people[0]?.id || "";
-  const selectedPerson = people.find((p) => p.id === selectedPersonId) || null;
-  await prisma.activityType.findMany();
-
+  const selectedPerson = orgPeople.find((p) => p.id === selectedPersonId) || null;
   const statusFilter = applyWritten ? [PolicyStatus.WRITTEN, PolicyStatus.ISSUED, PolicyStatus.PAID] : [PolicyStatus.ISSUED, PolicyStatus.PAID];
 
   let bucketAgencyId = selectedPerson?.primaryAgencyId || null;
-  if (!bucketAgencyId && selectedPerson?.teamId) {
-    const team = await prisma.team.findUnique({ where: { id: selectedPerson.teamId }, select: { agencyId: true } });
-    bucketAgencyId = team?.agencyId || null;
-  }
-  const premiumBuckets = bucketAgencyId ? await prisma.premiumBucket.findMany({ where: { agencyId: bucketAgencyId } }) : [];
+  const bucketAgencyMatch =
+    bucketAgencyId && viewerOrgId
+      ? await prisma.agency.findFirst({ where: { id: bucketAgencyId, orgId: viewerOrgId }, select: { id: true } })
+      : null;
+  const premiumBuckets = bucketAgencyMatch ? await prisma.premiumBucket.findMany({ where: { agencyId: bucketAgencyId } }) : [];
   const bucketById = premiumBuckets.reduce((acc, bucket) => {
     acc[bucket.id] = bucket;
     return acc;
   }, {} as BucketById);
 
-  const sold = selectedPerson
+  const sold = selectedPerson && viewerOrgId
     ? await prisma.soldProduct.findMany({
         where: {
           soldByPersonId: selectedPersonId,
+          agency: { orgId: viewerOrgId },
           dateSold: { gte: startDate, lte: endDate },
           status: { in: statusFilter },
         },
@@ -638,11 +683,11 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
       })
     : [];
 
-  const activities = selectedPerson
+  const activities = selectedPersonId
     ? await prisma.activityRecord.findMany({
         where: {
           activityDate: { gte: startDate, lte: endDate },
-          OR: [{ personId: selectedPersonId }, { personName: selectedPerson.fullName }],
+          personId: selectedPersonId,
         },
       })
     : [];
@@ -723,7 +768,7 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
   const monthKey = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}`;
 
   const resolvedPlan = selectedPerson
-    ? await resolvePlanForPerson(selectedPerson, monthKey)
+    ? await resolvePlanForPerson(selectedPerson, monthKey, viewerOrgId)
     : null;
 
   const bonusResult = resolvedPlan
@@ -757,7 +802,10 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
   }
 
   return (
-    <AppShell title="Paycheck" subtitle="Preview commissions and bonuses by month and team member.">
+    <AppShell
+      title="Paycheck"
+      subtitle={canViewOtherPaychecks ? "Preview commissions and bonuses by month and team member." : "Preview commissions and bonuses by month."}
+    >
       <form
         id="paycheck-filter-form"
         method="get"
@@ -791,20 +839,55 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
             style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db" }}
           />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "#475569" }}>
-          Team Member
-          <select name="person" defaultValue={selectedPersonId} style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db" }}>
-            {people.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.fullName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#475569" }}>
-          <input type="checkbox" name="written" value="1" defaultChecked={applyWritten} />
-          Apply Written
-        </label>
+        {canViewOtherPaychecks ? (
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "#475569" }}>
+            Team Member
+            <select name="person" defaultValue={selectedPersonId} style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db" }}>
+              {people.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.fullName}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#475569" }}>
+          <button
+            type="submit"
+            name="written"
+            value=""
+            style={{
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px solid #d1d5db",
+              background: !applyWritten ? "#1f2937" : "#fff",
+              color: !applyWritten ? "#fff" : "#475569",
+              fontWeight: !applyWritten ? 700 : 600,
+              cursor: "pointer",
+            }}
+          >
+            Apply Issued
+          </button>
+          <button
+            type="submit"
+            name="written"
+            value="1"
+            style={{
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px solid #d1d5db",
+              background: applyWritten ? "#1f2937" : "#fff",
+              color: applyWritten ? "#fff" : "#475569",
+              fontWeight: applyWritten ? 700 : 600,
+              cursor: "pointer",
+            }}
+          >
+            Apply Written
+          </button>
+          <span style={{ marginLeft: 6, fontSize: 12, color: "#6b7280" }}>
+            Mode: {applyWritten ? "Written" : "Issued"}
+          </span>
+        </div>
         <AutoSubmit formId="paycheck-filter-form" debounceMs={150} />
       </form>
 
@@ -814,6 +897,9 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
           <div style={{ fontWeight: 800 }}>{fmtMonthYear(startDate)}</div>
           <div style={{ marginTop: 4, fontSize: 13, color: "#475569" }}>
             Plan: {resolvedPlan?.planName || "No plan assigned"}
+          </div>
+          <div style={{ marginTop: 4, fontSize: 13, color: "#475569" }}>
+            Viewing: {selectedPerson?.fullName || "—"}
           </div>
           <div style={{ marginTop: 6, fontSize: 13, color: "#475569" }}>
             Commission, bonus, and activity payouts are calculated using your current plan. Chargebacks/adjustments not yet implemented.

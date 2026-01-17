@@ -20,8 +20,7 @@ function matchingPeople(plan: Awaited<typeof prisma.commissionPlan.findMany>[num
   }
   if (plan.scope === CommissionScope.AGENCY && plan.agencyId) {
     return people.filter((p) => {
-      const teamAgencyId = p.team?.agencyId || p.role?.team?.agencyId;
-      return teamAgencyId === plan.agencyId;
+      return p.primaryAgencyId === plan.agencyId;
     });
   }
   if (plan.scope === CommissionScope.TEAM_TYPE && plan.teamType) {
@@ -224,8 +223,8 @@ export default async function CommissionPage() {
       components: { orderBy: { displayOrder: "asc" } },
       assignments: { include: { person: true }, orderBy: { effectiveFrom: "desc" } },
       agency: true,
-      team: { include: { agency: true } },
-      role: { include: { team: { include: { agency: true } } } },
+      team: true,
+      role: { include: { team: true } },
       person: true,
     },
   });
@@ -233,17 +232,16 @@ export default async function CommissionPage() {
   const people = await prisma.person.findMany({
     orderBy: { fullName: "asc" },
     include: {
-      team: { include: { agency: true } },
-      role: { include: { team: { include: { agency: true } } } },
+      team: true,
+      role: { include: { team: true } },
     },
   });
   const agencies = await prisma.agency.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } });
   const teams = await prisma.team.findMany({
-    include: { agency: true },
     orderBy: { name: "asc" },
   });
   const roles = await prisma.role.findMany({
-    include: { team: { include: { agency: true } } },
+    include: { team: true },
     orderBy: { name: "asc" },
   });
 
@@ -473,7 +471,7 @@ export default async function CommissionPage() {
     } else if (agencyId) {
       scope = CommissionScope.AGENCY;
       baseUpdates.agencyId = agencyId;
-      targetPeople = await prisma.person.findMany({ where: { team: { agencyId } } });
+      targetPeople = await prisma.person.findMany({ where: { primaryAgencyId: agencyId } });
     } else if (teamType === "SALES" || teamType === "CS") {
       scope = CommissionScope.TEAM_TYPE;
       baseUpdates.teamType = teamType as TeamType;
@@ -603,7 +601,7 @@ export default async function CommissionPage() {
               <option value="">None</option>
               {teams.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.agency?.name ? `${t.agency.name} — ${t.name}` : t.name}
+                  {t.name}
                 </option>
               ))}
             </select>
@@ -616,7 +614,7 @@ export default async function CommissionPage() {
               <option value="">None</option>
               {roles.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {r.team.agency?.name ? `${r.team.agency.name} — ${r.team.name} / ${r.name}` : `${r.team.name} / ${r.name}`}
+                  {`${r.team.name} / ${r.name}`}
                 </option>
               ))}
             </select>
@@ -664,14 +662,12 @@ export default async function CommissionPage() {
                 scopeBits.push(`Agency: ${plan.agency.name}`);
               }
               if (plan.scope === CommissionScope.TEAM && plan.team) {
-                scopeBits.push(`Team: ${plan.team.agency?.name ? `${plan.team.agency.name} — ${plan.team.name}` : plan.team.name}`);
+                scopeBits.push(`Team: ${plan.team.name}`);
               }
               if (plan.scope === CommissionScope.ROLE && plan.role) {
                 scopeBits.push(
                   `Role: ${
-                    plan.role.team.agency?.name
-                      ? `${plan.role.team.agency.name} — ${plan.role.team.name} / ${plan.role.name}`
-                      : `${plan.role.team.name} / ${plan.role.name}`
+                    `${plan.role.team.name} / ${plan.role.name}`
                   }`
                 );
               }
@@ -794,7 +790,7 @@ export default async function CommissionPage() {
                           <option value="">None</option>
                           {teams.map((t) => (
                             <option key={t.id} value={t.id}>
-                              {t.agency?.name ? `${t.agency.name} — ${t.name}` : t.name}
+                              {t.name}
                             </option>
                           ))}
                         </select>
@@ -806,7 +802,7 @@ export default async function CommissionPage() {
                           <option value="">None</option>
                           {roles.map((r) => (
                             <option key={r.id} value={r.id}>
-                              {r.team.agency?.name ? `${r.team.agency.name} — ${r.team.name} / ${r.name}` : `${r.team.name} / ${r.name}`}
+                              {`${r.team.name} / ${r.name}`}
                             </option>
                           ))}
                         </select>

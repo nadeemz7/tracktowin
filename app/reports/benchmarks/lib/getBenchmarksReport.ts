@@ -195,7 +195,7 @@ export async function getBenchmarksReport({
   // People and expectations
   const [roleExpectations, personOverrides, people, agencyLobs, activityTypes] = await Promise.all([
     prisma.benchRoleExpectation.findMany({
-      where: { role: { team: { agencyId: orgId } } },
+      where: { role: { team: { orgId } } },
       include: { role: { include: { team: true } } },
     }),
     prisma.benchPersonOverride.findMany({

@@ -8,7 +8,7 @@ export default async function ExpectationsPage() {
   const roles = await prisma.role.findMany({
     orderBy: { name: "asc" },
     include: {
-      team: { include: { agency: true } },
+      team: true,
     },
   });
 
@@ -16,7 +16,7 @@ export default async function ExpectationsPage() {
   const activities = await prisma.activityType.findMany({ orderBy: { name: "asc" }, include: { agency: true } });
   const expectations = await prisma.productionExpectation.findMany({
     orderBy: { updatedAt: "desc" },
-    include: { role: { include: { team: { include: { agency: true } } } }, lineOfBusiness: true, activityType: true, agency: true },
+    include: { role: { include: { team: true } }, lineOfBusiness: true, activityType: true, agency: true },
   });
 
   async function upsertExpectation(formData: FormData) {
@@ -59,7 +59,6 @@ export default async function ExpectationsPage() {
                 <option value="">Select role</option>
                 {roles.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.team.agency?.name ? `${r.team.agency.name} • ` : ""}
                     {r.team.name} — {r.name}
                   </option>
                 ))}
@@ -140,7 +139,6 @@ export default async function ExpectationsPage() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                   <div>
                     <div style={{ fontWeight: 700 }}>
-                      {e.role.team.agency?.name ? `${e.role.team.agency.name} • ` : ""}
                       {e.role.team.name} — {e.role.name}
                     </div>
                     <div style={{ color: "#6b7280", fontSize: 13 }}>

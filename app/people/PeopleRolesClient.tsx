@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { PERMISSION_DEFINITIONS } from "@/lib/permissions";
 import { useOrgLobs } from "./useOrgLobs";
 
 type Agency = { id: string; name: string; linesOfBusiness?: { id: string; name: string }[] };
-type Team = { id: string; name: string; agencyId: string; agency?: Agency | null; roles: { id: string; name: string }[] };
+type Team = { id: string; name: string; roles: { id: string; name: string }[] };
 type OrgLob = { id: string; name: string; premiumCategory?: string | null };
 type ActivityTypeOption = { id: string; name: string; active?: boolean | null };
 type Person = {
@@ -17,9 +18,10 @@ type Person = {
   isAdmin?: boolean;
   isManager?: boolean;
   active?: boolean;
-  team?: { id: string; name: string; agency?: Agency | null } | null;
+  team?: { id: string; name: string } | null;
   role?: { id: string; name: string } | null;
   primaryAgency?: Agency | null;
+  orgRoles?: { roleId?: string | null; role?: { id: string; key?: string; name?: string; isSystem?: boolean } | null }[] | null;
 };
 
 type RoleExpectation = {
@@ -31,7 +33,7 @@ type RoleExpectation = {
   premiumByLob?: { lobId: string; premium: number }[] | null;
   appGoalsByLobJson?: Record<string, number> | null;
   activityTargetsByTypeJson?: Record<string, number> | null;
-  role?: { id: string; name: string; team?: { id: string; name: string; agencyId: string } | null } | null;
+  role?: { id: string; name: string; team?: { id: string; name: string } | null } | null;
 };
 
 type PersonOverride = {
@@ -48,10 +50,12 @@ type Props = {
   roleExpectations: RoleExpectation[];
   personOverrides: PersonOverride[];
   initialSelectedPersonId?: string | null;
+  canManagePeople: boolean;
 };
 
 type RoleWithTeam = { id: string; name: string; team?: Team | null };
 type SaveState = { saving: boolean; error: string | null; success: boolean };
+type OrgRoleApi = { id: string; key: string; name: string; isSystem: boolean; permissions: string[] };
 
 function useOrgActivityTypes() {
   const [activityTypes, setActivityTypes] = useState<ActivityTypeOption[]>([]);
@@ -65,16 +69,7 @@ function useOrgActivityTypes() {
       setLoading(true);
       setError(null);
       try {
-        const viewerRes = await fetch("/api/viewer/context");
-        if (!viewerRes.ok) throw new Error("Failed to load viewer context");
-        const viewerJson = await viewerRes.json();
-        const orgId = viewerJson?.viewer?.orgId;
-        if (!orgId) {
-          if (active) setActivityTypes([]);
-          return;
-        }
-
-        const typesRes = await fetch("/api/activity-types", { headers: { "x-org-id": String(orgId) } });
+        const typesRes = await fetch("/api/activity-types", { credentials: "include" });
         if (!typesRes.ok) throw new Error("Failed to load activity types");
         const types = await typesRes.json();
         const list = (Array.isArray(types) ? types : [])
@@ -131,6 +126,7 @@ export default function PeopleRolesClient({
   roleExpectations,
   personOverrides,
   initialSelectedPersonId = null,
+  canManagePeople,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [localPeople, setLocalPeople] = useState<Person[]>(() => [...people].sort((a, b) => a.fullName.localeCompare(b.fullName)));
@@ -144,6 +140,11 @@ export default function PeopleRolesClient({
 
   const [assignState, setAssignState] = useState<SaveState>({ saving: false, error: null, success: false });
   const [overrideState, setOverrideState] = useState<SaveState>({ saving: false, error: null, success: false });
+  const [orgRoles, setOrgRoles] = useState<OrgRoleApi[]>([]);
+  const [orgRolesLoading, setOrgRolesLoading] = useState<boolean>(false);
+  const [orgRolesError, setOrgRolesError] = useState<string | null>(null);
+  const [orgRoleIdsInput, setOrgRoleIdsInput] = useState<string[]>([]);
+  const [orgRoleSave, setOrgRoleSave] = useState<SaveState>({ saving: false, error: null, success: false });
 
   const [roleIdInput, setRoleIdInput] = useState<string>("");
   const [teamIdInput, setTeamIdInput] = useState<string>("");
@@ -197,6 +198,35 @@ export default function PeopleRolesClient({
   }, [overrideActivityTargets]);
 
   useEffect(() => {
+    if (!canManagePeople) return;
+    let active = true;
+
+    async function loadOrgRoles() {
+      setOrgRolesLoading(true);
+      setOrgRolesError(null);
+      try {
+        const res = await fetch("/api/org-roles", { credentials: "include" });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to load org roles");
+        }
+        const json = await res.json();
+        const rolesList = Array.isArray(json?.roles) ? json.roles : [];
+        if (active) setOrgRoles(rolesList);
+      } catch (err: any) {
+        if (active) setOrgRolesError(err?.message || "Failed to load org roles");
+      } finally {
+        if (active) setOrgRolesLoading(false);
+      }
+    }
+
+    loadOrgRoles();
+    return () => {
+      active = false;
+    };
+  }, [canManagePeople]);
+
+  useEffect(() => {
     if (!orgLobs.length) return;
     setOverrideAppsByLobInputs((prev) => {
       const next = { ...prev };
@@ -225,11 +255,20 @@ export default function PeopleRolesClient({
     if (!person) return;
     setRoleIdInput(person.roleId || "");
     setTeamIdInput(person.teamId || "");
-    setPrimaryAgencyInput(person.primaryAgencyId || person.team?.agency?.id || "");
+    setPrimaryAgencyInput(person.primaryAgencyId || "");
     setIsAdminInput(Boolean(person.isAdmin));
     setIsManagerInput(Boolean(person.isManager));
     setActiveInput(person.active !== false);
     if (person?.id) hydrateOverrideInputs(person.id);
+    const assignedOrgRoleIds = Array.from(
+      new Set(
+        (person.orgRoles ?? [])
+          .map((assignment) => assignment.roleId || assignment.role?.id)
+          .filter((roleId): roleId is string => Boolean(roleId))
+      )
+    );
+    setOrgRoleIdsInput(assignedOrgRoleIds);
+    setOrgRoleSave({ saving: false, error: null, success: false });
   }
 
   function hydrateOverrideInputs(personId: string) {
@@ -401,6 +440,53 @@ export default function PeopleRolesClient({
     }
   }
 
+  async function saveOrgRoles() {
+    if (!selected) return;
+    setOrgRoleSave({ saving: true, error: null, success: false });
+    try {
+      const res = await fetch("/api/people/org-roles", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: selected.id, roleIds: orgRoleIdsInput }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Save failed");
+      }
+      const json = await res.json();
+      const roleIds = Array.isArray(json?.roleIds) ? json.roleIds : orgRoleIdsInput;
+      const roleById = new Map(orgRoles.map((role) => [role.id, role]));
+      setOrgRoleIdsInput(roleIds);
+      setLocalPeople((prev) =>
+        prev.map((person) =>
+          person.id === selected.id
+            ? {
+                ...person,
+                orgRoles: roleIds.map((roleId) => {
+                  const meta = roleById.get(roleId);
+                  return {
+                    roleId,
+                    role: meta
+                      ? {
+                          id: meta.id,
+                          key: meta.key,
+                          name: meta.name,
+                          isSystem: meta.isSystem,
+                        }
+                      : { id: roleId },
+                  };
+                }),
+              }
+            : person
+        )
+      );
+      setOrgRoleSave({ saving: false, error: null, success: true });
+    } catch (err: any) {
+      setOrgRoleSave({ saving: false, error: err?.message || "Save failed", success: false });
+    }
+  }
+
   const sectionCardStyle = {
     background: "#fff",
     border: "1px solid #e5e7eb",
@@ -452,7 +538,7 @@ export default function PeopleRolesClient({
                   </span>
                 </div>
                 <div style={{ color: "#4b5563", fontSize: 13, marginTop: 4 }}>
-                  {p.role?.name || "No role"} • {p.primaryAgency?.name || p.team?.agency?.name || "No office"}
+                  {p.role?.name || "No role"} • {p.primaryAgency?.name || "No office"}
                 </div>
                 <div style={{ color: "#6b7280", fontSize: 12, marginTop: 4 }}>
                   Status: {p.active === false ? "Inactive" : "Active"}
@@ -472,7 +558,7 @@ export default function PeopleRolesClient({
               <div>
                 <div style={{ fontWeight: 800, fontSize: 20 }}>{selected.fullName}</div>
                 <div style={{ color: "#6b7280", fontSize: 13 }}>
-                  {selected.role?.name || "No role"} • {selected.primaryAgency?.name || selected.team?.agency?.name || "No office"}
+                  {selected.role?.name || "No role"} • {selected.primaryAgency?.name || "No office"}
                 </div>
               </div>
               <div
@@ -497,7 +583,7 @@ export default function PeopleRolesClient({
                     <option value="">No team</option>
                     {teams.map((t) => (
                       <option key={t.id} value={t.id}>
-                        {t.agency?.name ? `${t.agency.name} — ${t.name}` : t.name}
+                        {t.name}
                       </option>
                     ))}
                   </select>
@@ -509,7 +595,7 @@ export default function PeopleRolesClient({
                     {teams.flatMap((t) =>
                       t.roles.map((r) => (
                         <option key={r.id} value={r.id}>
-                          {t.agency?.name ? `${t.agency.name} — ${t.name} / ${r.name}` : `${t.name} / ${r.name}`}
+                                    {`${t.name} / ${r.name}`}
                         </option>
                       ))
                     )}
@@ -541,6 +627,73 @@ export default function PeopleRolesClient({
                   Active
                 </label>
               </div>
+              {canManagePeople ? (
+                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                  <div style={{ fontWeight: 600 }}>Org Roles</div>
+                  {orgRolesLoading ? (
+                    <div style={{ color: "#6b7280", fontSize: 13 }}>Loading org roles…</div>
+                  ) : orgRolesError ? (
+                    <div style={{ color: "#b91c1c", fontSize: 13 }}>{orgRolesError}</div>
+                  ) : orgRoles.length ? (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {orgRoles.map((role) => (
+                        <label key={role.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={orgRoleIdsInput.includes(role.id)}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setOrgRoleIdsInput((prev) => {
+                                const next = new Set(prev);
+                                if (checked) {
+                                  next.add(role.id);
+                                } else {
+                                  next.delete(role.id);
+                                }
+                                return Array.from(next);
+                              });
+                              setOrgRoleSave({ saving: false, error: null, success: false });
+                            }}
+                            disabled={orgRolesLoading}
+                          />
+                          <span style={{ fontWeight: 600 }}>{role.name}</span>
+                          <span style={{ color: "#6b7280", fontSize: 12 }}>{role.key}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ color: "#6b7280", fontSize: 13 }}>No org roles available.</div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={saveOrgRoles}
+                      disabled={orgRoleSave.saving || orgRolesLoading || orgRoles.length === 0}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #111827",
+                        background: "#111827",
+                        color: "#fff",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {orgRoleSave.saving ? "Saving…" : "Save Org Roles"}
+                    </button>
+                    {orgRoleSave.error ? (
+                      <span style={{ color: "#b91c1c", fontSize: 13 }}>{orgRoleSave.error}</span>
+                    ) : null}
+                    {orgRoleSave.success ? <span style={{ color: "#065f46", fontSize: 13 }}>Saved</span> : null}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
+                  <div style={{ fontWeight: 600 }}>Org Roles</div>
+                  <div style={{ fontSize: 13, color: "#475569" }}>
+                    You can view roles, but you don't have permission to edit org roles.
+                  </div>
+                </div>
+              )}
               <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
                 <button
                   type="button"
@@ -1000,14 +1153,22 @@ type RolesTabProps = {
   roleExpectations: RoleExpectation[];
   activityTypes: ActivityTypeOption[];
   lobs: OrgLob[];
+  canManagePeople: boolean;
 };
 
-export function RolesTab({ roles, roleExpectations, activityTypes, lobs }: RolesTabProps) {
+export function RolesTab({ roles, roleExpectations, activityTypes, lobs, canManagePeople }: RolesTabProps) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [expectationsMap, setExpectationsMap] = useState<Map<string, RoleExpectation>>(
     () => new Map(roleExpectations.map((r) => [r.roleId, r]))
   );
   const sortedRoles = useMemo(() => [...roles].sort((a, b) => a.name.localeCompare(b.name)), [roles]);
+  const [orgRoles, setOrgRoles] = useState<OrgRoleApi[]>([]);
+  const [orgRolesLoading, setOrgRolesLoading] = useState(false);
+  const [orgRolesError, setOrgRolesError] = useState<string | null>(null);
+  const [selectedOrgRoleId, setSelectedOrgRoleId] = useState<string>("");
+  const [rolePermsDraft, setRolePermsDraft] = useState<Record<string, boolean>>({});
+  const [permSave, setPermSave] = useState<SaveState>({ saving: false, error: null, success: false });
+  const permKeys = useMemo(() => Object.keys(PERMISSION_DEFINITIONS).sort(), []);
 
   const [bucketPc, setBucketPc] = useState<number>(0);
   const [bucketFs, setBucketFs] = useState<number>(0);
@@ -1031,6 +1192,72 @@ export function RolesTab({ roles, roleExpectations, activityTypes, lobs }: Roles
     if (!Number.isFinite(num) || num < 0) return 0;
     return num;
   };
+
+  useEffect(() => {
+    if (!canManagePeople) return;
+    let active = true;
+
+    async function loadOrgRoles() {
+      setOrgRolesLoading(true);
+      setOrgRolesError(null);
+      try {
+        const res = await fetch("/api/org-roles", { credentials: "include" });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to load org roles");
+        }
+        const json = await res.json();
+        const rolesList = Array.isArray(json?.roles) ? json.roles : [];
+        if (active) {
+          setOrgRoles(rolesList);
+          setSelectedOrgRoleId((prev) => prev || rolesList[0]?.id || "");
+        }
+      } catch (err: any) {
+        if (active) setOrgRolesError(err?.message || "Failed to load org roles");
+      } finally {
+        if (active) setOrgRolesLoading(false);
+      }
+    }
+
+    loadOrgRoles();
+    return () => {
+      active = false;
+    };
+  }, [canManagePeople]);
+
+  useEffect(() => {
+    if (canManagePeople) return;
+    setOrgRoles([]);
+    setSelectedOrgRoleId("");
+    setRolePermsDraft({});
+    setOrgRolesError(null);
+    setOrgRolesLoading(false);
+    setPermSave({ saving: false, error: null, success: false });
+  }, [canManagePeople]);
+
+  useEffect(() => {
+    if (!selectedOrgRoleId) {
+      setRolePermsDraft({});
+      return;
+    }
+    const selectedRole = orgRoles.find((role) => role.id === selectedOrgRoleId);
+    if (!selectedRole) {
+      setRolePermsDraft({});
+      return;
+    }
+    const draft: Record<string, boolean> = {};
+    const rolePerms = Array.isArray(selectedRole.permissions) ? selectedRole.permissions : [];
+    const rolePermSet = new Set(
+      rolePerms.map((permission) => (typeof permission === "string" ? permission.trim() : "")).filter(Boolean)
+    );
+    permKeys.forEach((key) => {
+      draft[key] = rolePermSet.has(key);
+    });
+    rolePermSet.forEach((permission) => {
+      if (draft[permission] === undefined) draft[permission] = true;
+    });
+    setRolePermsDraft(draft);
+  }, [selectedOrgRoleId, orgRoles, permKeys]);
 
   useEffect(() => {
     if (!lobs.length) return;
@@ -1181,312 +1408,432 @@ export function RolesTab({ roles, roleExpectations, activityTypes, lobs }: Roles
     }
   }
 
-  return (
-    <div className="surface" style={{ padding: 12, display: "grid", gap: 8 }}>
-      <div style={{ fontWeight: 700 }}>Roles</div>
-      <div style={{ display: "grid", gap: 8 }}>
-        {sortedRoles.map((r) => {
-          const exp = expectationsMap.get(r.id);
-          const configured = Boolean(exp);
-          const open = expanded === r.id;
-          return (
-            <div
-              key={r.id}
-              style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}
-            >
-              <button
-                onClick={() => openRole(r.id)}
-                style={{
-                  width: "100%",
-                  textAlign: "left",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  background: "transparent",
-                  border: "none",
-                  padding: 0,
-                  cursor: "pointer",
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 700 }}>{r.name}</div>
-                  <div style={{ color: "#6b7280", fontSize: 13 }}>
-                    {r.team?.name || "No team"} • {r.team?.agency?.name || "No agency"}
-                  </div>
-                </div>
-                <span
-                  style={{
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    background: configured ? "#ecfeff" : "#f3f4f6",
-                    color: configured ? "#0ea5e9" : "#4b5563",
-                    fontSize: 12,
-                    fontWeight: 700,
-                  }}
-                >
-                  {configured ? "Configured" : "Not set"}
-                </span>
-              </button>
+  async function saveOrgRolePermissions() {
+    if (!canManagePeople) return;
+    if (!selectedOrgRoleId) return;
+    setPermSave({ saving: true, error: null, success: false });
+    try {
+      const permissions = Object.keys(rolePermsDraft).filter((key) => rolePermsDraft[key]);
+      const res = await fetch(`/api/org-roles/${selectedOrgRoleId}/permissions`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ permissions }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Save failed");
+      }
+      const json = await res.json();
+      const updatedPerms = Array.isArray(json?.permissions) ? json.permissions : permissions;
+      setOrgRoles((prev) =>
+        prev.map((role) => (role.id === selectedOrgRoleId ? { ...role, permissions: updatedPerms } : role))
+      );
+      setPermSave({ saving: false, error: null, success: true });
+    } catch (err: any) {
+      setPermSave({ saving: false, error: err?.message || "Save failed", success: false });
+    }
+  }
 
-              {open ? (
-                <div style={{ marginTop: 10, borderTop: "1px solid #e5e7eb", paddingTop: 10, display: "grid", gap: 12 }}>
-                  <div
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      {canManagePeople ? (
+        <div className="surface" style={{ padding: 12, display: "grid", gap: 12 }}>
+          <div style={{ fontWeight: 700 }}>Org Roles & Permissions</div>
+          {orgRolesError ? <div style={{ color: "#b91c1c", fontSize: 13 }}>{orgRolesError}</div> : null}
+          {orgRolesLoading ? <div style={{ color: "#6b7280", fontSize: 13 }}>Loading org roles…</div> : null}
+          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "minmax(220px, 1fr) 2fr" }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontWeight: 600 }}>Role</span>
+              <select
+                value={selectedOrgRoleId}
+                onChange={(e) => {
+                  setSelectedOrgRoleId(e.target.value);
+                  setPermSave({ saving: false, error: null, success: false });
+                }}
+                disabled={orgRolesLoading || orgRoles.length === 0}
+                style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+              >
+                <option value="">Select role</option>
+                {orgRoles.map((role) => (
+                  <option key={role.id} value={role.id}>
+                    {role.name} ({role.key})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div style={{ display: "grid", gap: 8 }}>
+              {permKeys.map((key) => {
+                const def = PERMISSION_DEFINITIONS[key];
+                return (
+                  <label
+                    key={key}
                     style={{
-                      background: "#fff",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 12,
-                      padding: 16,
                       display: "grid",
-                      gap: 12,
+                      gridTemplateColumns: "auto 1fr",
+                      gap: 8,
+                      alignItems: "start",
                     }}
                   >
-                    <div style={{ display: "grid", gap: 4 }}>
-                      <div style={{ fontWeight: 700 }}>Apps targets by Line of Business</div>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
-                        These are role defaults. People can override individually.
+                    <input
+                      type="checkbox"
+                      checked={Boolean(rolePermsDraft[key])}
+                      onChange={(e) =>
+                        setRolePermsDraft((prev) => ({
+                          ...prev,
+                          [key]: e.target.checked,
+                        }))
+                      }
+                      disabled={!selectedOrgRoleId}
+                    />
+                    <div style={{ display: "grid", gap: 2 }}>
+                      <div style={{ fontWeight: 600 }}>{key}</div>
+                      {def?.label ? (
+                        <div style={{ fontSize: 12, color: "#6b7280" }}>{def.label}</div>
+                      ) : null}
+                      {def?.description ? (
+                        <div style={{ fontSize: 12, color: "#6b7280" }}>{def.description}</div>
+                      ) : null}
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={saveOrgRolePermissions}
+              disabled={!selectedOrgRoleId || permSave.saving}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 8,
+                border: "1px solid #111827",
+                background: "#111827",
+                color: "#fff",
+                fontWeight: 700,
+              }}
+            >
+              {permSave.saving ? "Saving…" : "Save Permissions"}
+            </button>
+            {permSave.error ? <span style={{ color: "#b91c1c", fontSize: 13 }}>{permSave.error}</span> : null}
+            {permSave.success ? <span style={{ color: "#065f46", fontSize: 13 }}>Saved</span> : null}
+          </div>
+        </div>
+      ) : (
+        <div className="surface" style={{ padding: 12, display: "grid", gap: 6 }}>
+          <div style={{ fontWeight: 700 }}>Org Roles & Permissions</div>
+          <div style={{ fontSize: 13, color: "#475569" }}>
+            You can view roles, but you don't have permission to edit org role permissions.
+          </div>
+        </div>
+      )}
+      <div className="surface" style={{ padding: 12, display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 700 }}>Roles</div>
+        <div style={{ display: "grid", gap: 8 }}>
+          {sortedRoles.map((r) => {
+            const exp = expectationsMap.get(r.id);
+            const configured = Boolean(exp);
+            const open = expanded === r.id;
+            return (
+              <div
+                key={r.id}
+                style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}
+              >
+                <button
+                  onClick={() => openRole(r.id)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{r.name}</div>
+                    <div style={{ color: "#6b7280", fontSize: 13 }}>
+                      {r.team?.name || "No team"}
+                    </div>
+                  </div>
+                  <span
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: configured ? "#ecfeff" : "#f3f4f6",
+                      color: configured ? "#0ea5e9" : "#4b5563",
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {configured ? "Configured" : "Not set"}
+                  </span>
+                </button>
+
+                {open ? (
+                  <div style={{ marginTop: 10, borderTop: "1px solid #e5e7eb", paddingTop: 10, display: "grid", gap: 12 }}>
+                    <div
+                      style={{
+                        background: "#fff",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 16,
+                        display: "grid",
+                        gap: 12,
+                      }}
+                    >
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <div style={{ fontWeight: 700 }}>Apps targets by Line of Business</div>
+                        <div style={{ fontSize: 12, color: "#6b7280" }}>
+                          These are role defaults. People can override individually.
+                        </div>
+                      </div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {lobs.map((lob) => (
+                          <label key={lob.id} style={{ display: "grid", gap: 4, gridTemplateColumns: "1fr 180px", alignItems: "center" }}>
+                            <span style={{ fontWeight: 600 }}>{lob.name}</span>
+                            <input
+                              type="number"
+                              value={appGoalsByLobInputs[lob.id] ?? 0}
+                              onChange={(e) =>
+                                setAppGoalsByLobInputs((prev) => ({
+                                  ...prev,
+                                  [lob.id]: toNonNegativeInt(e.target.value),
+                                }))
+                              }
+                              placeholder="Monthly apps"
+                              style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                            />
+                          </label>
+                        ))}
                       </div>
                     </div>
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {lobs.map((lob) => (
-                        <label key={lob.id} style={{ display: "grid", gap: 4, gridTemplateColumns: "1fr 180px", alignItems: "center" }}>
-                          <span style={{ fontWeight: 600 }}>{lob.name}</span>
+
+                    <div
+                      style={{
+                        background: "#fff",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 16,
+                        display: "grid",
+                        gap: 12,
+                      }}
+                    >
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <div style={{ fontWeight: 700 }}>Premium targets (bucket totals)</div>
+                        <div style={{ fontSize: 12, color: "#6b7280" }}>
+                          These are role defaults. People can override individually.
+                        </div>
+                      </div>
+                      <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span style={{ fontWeight: 600 }}>PC premium</span>
                           <input
                             type="number"
-                            value={appGoalsByLobInputs[lob.id] ?? 0}
-                            onChange={(e) =>
-                              setAppGoalsByLobInputs((prev) => ({
-                                ...prev,
-                                [lob.id]: toNonNegativeInt(e.target.value),
-                              }))
-                            }
-                            placeholder="Monthly apps"
+                            value={bucketPc}
+                            onChange={(e) => setBucketPc(toNonNegativeNumber(e.target.value))}
                             style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
                           />
                         </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      background: "#fff",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 12,
-                      padding: 16,
-                      display: "grid",
-                      gap: 12,
-                    }}
-                  >
-                    <div style={{ display: "grid", gap: 4 }}>
-                      <div style={{ fontWeight: 700 }}>Premium targets (bucket totals)</div>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
-                        These are role defaults. People can override individually.
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span style={{ fontWeight: 600 }}>FS premium</span>
+                          <input
+                            type="number"
+                            value={bucketFs}
+                            onChange={(e) => setBucketFs(toNonNegativeNumber(e.target.value))}
+                            style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 4 }}>
+                          <span style={{ fontWeight: 600 }}>IPS premium (optional)</span>
+                          <input
+                            type="number"
+                            value={bucketIps}
+                            onChange={(e) => setBucketIps(toNonNegativeNumber(e.target.value))}
+                            style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                          />
+                        </label>
                       </div>
                     </div>
-                    <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span style={{ fontWeight: 600 }}>PC premium</span>
-                        <input
-                          type="number"
-                          value={bucketPc}
-                          onChange={(e) => setBucketPc(toNonNegativeNumber(e.target.value))}
-                          style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                        />
-                      </label>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span style={{ fontWeight: 600 }}>FS premium</span>
-                        <input
-                          type="number"
-                          value={bucketFs}
-                          onChange={(e) => setBucketFs(toNonNegativeNumber(e.target.value))}
-                          style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                        />
-                      </label>
-                      <label style={{ display: "grid", gap: 4 }}>
-                        <span style={{ fontWeight: 600 }}>IPS premium (optional)</span>
-                        <input
-                          type="number"
-                          value={bucketIps}
-                          onChange={(e) => setBucketIps(toNonNegativeNumber(e.target.value))}
-                          style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                        />
-                      </label>
-                    </div>
-                  </div>
 
-                  <div
-                    style={{
-                      background: "#fff",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 12,
-                      padding: 16,
-                      display: "grid",
-                      gap: 12,
-                    }}
-                  >
-                    <div style={{ display: "grid", gap: 4 }}>
-                      <div style={{ fontWeight: 700 }}>Activity targets</div>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
-                        These are role defaults. People can override individually.
+                    <div
+                      style={{
+                        background: "#fff",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 16,
+                        display: "grid",
+                        gap: 12,
+                      }}
+                    >
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <div style={{ fontWeight: 700 }}>Activity targets</div>
+                        <div style={{ fontSize: 12, color: "#6b7280" }}>
+                          These are role defaults. People can override individually.
+                        </div>
                       </div>
-                    </div>
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {(() => {
-                        const availableTypes = activityTypes
-                          .filter((t) => t.active !== false)
-                          .sort((a, b) => a.name.localeCompare(b.name));
-                        const addedIds = Object.keys(activityTargetsByTypeInputs);
-                        const remainingTypes = availableTypes.filter((t) => !addedIds.includes(t.id));
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {(() => {
+                          const availableTypes = activityTypes
+                            .filter((t) => t.active !== false)
+                            .sort((a, b) => a.name.localeCompare(b.name));
+                          const addedIds = Object.keys(activityTargetsByTypeInputs);
+                          const remainingTypes = availableTypes.filter((t) => !addedIds.includes(t.id));
 
-                        return (
-                          <>
-                            {addedIds.length === 0 ? (
-                              <div style={{ color: "#6b7280", fontSize: 13 }}>No activity targets yet.</div>
-                            ) : (
-                              addedIds.map((id) => {
-                                const activity = availableTypes.find((t) => t.id === id) || activityTypes.find((t) => t.id === id);
-                                return (
-                                  <div
-                                    key={id}
-                                    style={{
-                                      display: "grid",
-                                      gridTemplateColumns: "1fr 180px auto",
-                                      gap: 8,
-                                      alignItems: "center",
-                                      border: "1px solid #e5e7eb",
-                                      borderRadius: 10,
-                                      padding: 10,
-                                      background: "#f8fafc",
-                                    }}
-                                  >
-                                    <div style={{ fontWeight: 600 }}>{activity?.name || "Activity"}</div>
-                                    <input
-                                      type="number"
-                                      value={activityTargetsByTypeInputs[id] ?? 0}
-                                      onChange={(e) =>
-                                        setActivityTargetsByTypeInputs((prev) => ({
-                                          ...prev,
-                                          [id]: toNonNegativeInt(e.target.value),
-                                        }))
-                                      }
-                                      placeholder="Monthly target"
-                                      style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setActivityTargetsByTypeInputs((prev) => {
-                                          const next = { ...prev };
-                                          delete next[id];
-                                          return next;
-                                        })
-                                      }
+                          return (
+                            <>
+                              {addedIds.length === 0 ? (
+                                <div style={{ color: "#6b7280", fontSize: 13 }}>No activity targets yet.</div>
+                              ) : (
+                                addedIds.map((id) => {
+                                  const activity = availableTypes.find((t) => t.id === id) || activityTypes.find((t) => t.id === id);
+                                  return (
+                                    <div
+                                      key={id}
                                       style={{
-                                        padding: "8px 10px",
-                                        borderRadius: 8,
+                                        display: "grid",
+                                        gridTemplateColumns: "1fr 180px auto",
+                                        gap: 8,
+                                        alignItems: "center",
                                         border: "1px solid #e5e7eb",
-                                        background: "#fff",
-                                        color: "#111827",
-                                        fontWeight: 700,
+                                        borderRadius: 10,
+                                        padding: 10,
+                                        background: "#f8fafc",
                                       }}
                                     >
-                                      Remove
-                                    </button>
-                                  </div>
-                                );
-                              })
-                            )}
+                                      <div style={{ fontWeight: 600 }}>{activity?.name || "Activity"}</div>
+                                      <input
+                                        type="number"
+                                        value={activityTargetsByTypeInputs[id] ?? 0}
+                                        onChange={(e) =>
+                                          setActivityTargetsByTypeInputs((prev) => ({
+                                            ...prev,
+                                            [id]: toNonNegativeInt(e.target.value),
+                                          }))
+                                        }
+                                        placeholder="Monthly target"
+                                        style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setActivityTargetsByTypeInputs((prev) => {
+                                            const next = { ...prev };
+                                            delete next[id];
+                                            return next;
+                                          })
+                                        }
+                                        style={{
+                                          padding: "8px 10px",
+                                          borderRadius: 8,
+                                          border: "1px solid #e5e7eb",
+                                          background: "#fff",
+                                          color: "#111827",
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  );
+                                })
+                              )}
 
-                            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                              <button
-                                type="button"
-                                onClick={() => setActivityPickerOpen((prev) => !prev)}
-                                disabled={!remainingTypes.length}
-                                style={{
-                                  padding: "8px 12px",
-                                  borderRadius: 8,
-                                  border: "1px solid #111827",
-                                  background: "#111827",
-                                  color: "#fff",
-                                  fontWeight: 700,
-                                  opacity: remainingTypes.length ? 1 : 0.6,
-                                }}
-                              >
-                                + Add activity target
-                              </button>
-                              {!remainingTypes.length ? (
-                                <span style={{ color: "#6b7280", fontSize: 12 }}>All activity types added.</span>
+                              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setActivityPickerOpen((prev) => !prev)}
+                                  disabled={!remainingTypes.length}
+                                  style={{
+                                    padding: "8px 12px",
+                                    borderRadius: 8,
+                                    border: "1px solid #111827",
+                                    background: "#111827",
+                                    color: "#fff",
+                                    fontWeight: 700,
+                                    opacity: remainingTypes.length ? 1 : 0.6,
+                                  }}
+                                >
+                                  + Add activity target
+                                </button>
+                                {!remainingTypes.length ? (
+                                  <span style={{ color: "#6b7280", fontSize: 12 }}>All activity types added.</span>
+                                ) : null}
+                              </div>
+
+                              {activityPickerOpen ? (
+                                <select
+                                  value={activityPickerValue}
+                                  onChange={(e) => {
+                                    const nextId = e.target.value;
+                                    if (!nextId) return;
+                                    setActivityTargetsByTypeInputs((prev) => ({
+                                      ...prev,
+                                      [nextId]: prev[nextId] ?? 0,
+                                    }));
+                                    setActivityPickerValue("");
+                                    setActivityPickerOpen(false);
+                                  }}
+                                  style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", maxWidth: 320 }}
+                                >
+                                  <option value="">Select activity</option>
+                                  {remainingTypes.map((t) => (
+                                    <option key={t.id} value={t.id}>
+                                      {t.name}
+                                    </option>
+                                  ))}
+                                </select>
                               ) : null}
-                            </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
 
-                            {activityPickerOpen ? (
-                              <select
-                                value={activityPickerValue}
-                                onChange={(e) => {
-                                  const nextId = e.target.value;
-                                  if (!nextId) return;
-                                  setActivityTargetsByTypeInputs((prev) => ({
-                                    ...prev,
-                                    [nextId]: prev[nextId] ?? 0,
-                                  }));
-                                  setActivityPickerValue("");
-                                  setActivityPickerOpen(false);
-                                }}
-                                style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb", maxWidth: 320 }}
-                              >
-                                <option value="">Select activity</option>
-                                {remainingTypes.map((t) => (
-                                  <option key={t.id} value={t.id}>
-                                    {t.name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : null}
-                          </>
-                        );
-                      })()}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        onClick={() => save(r.id)}
+                        disabled={state.saving}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: 8,
+                          border: "1px solid #111827",
+                          background: "#111827",
+                          color: "#fff",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {state.saving ? "Saving…" : "Save Role Defaults"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => clear(r.id)}
+                        disabled={state.saving}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: 8,
+                          border: "1px solid #e5e7eb",
+                          background: "#fff",
+                          color: "#111827",
+                          fontWeight: 700,
+                        }}
+                      >
+                        Clear Role Defaults
+                      </button>
+                      {state.error ? <span style={{ color: "#b91c1c", fontSize: 13 }}>{state.error}</span> : null}
+                      {state.success ? <span style={{ color: "#065f46", fontSize: 13 }}>Saved</span> : null}
                     </div>
                   </div>
-
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <button
-                      type="button"
-                      onClick={() => save(r.id)}
-                      disabled={state.saving}
-                      style={{
-                        padding: "10px 14px",
-                        borderRadius: 8,
-                        border: "1px solid #111827",
-                        background: "#111827",
-                        color: "#fff",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {state.saving ? "Saving…" : "Save Role Defaults"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => clear(r.id)}
-                      disabled={state.saving}
-                      style={{
-                        padding: "10px 14px",
-                        borderRadius: 8,
-                        border: "1px solid #e5e7eb",
-                        background: "#fff",
-                        color: "#111827",
-                        fontWeight: 700,
-                      }}
-                    >
-                      Clear Role Defaults
-                    </button>
-                    {state.error ? <span style={{ color: "#b91c1c", fontSize: 13 }}>{state.error}</span> : null}
-                    {state.success ? <span style={{ color: "#065f46", fontSize: 13 }}>Saved</span> : null}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

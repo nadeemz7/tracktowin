@@ -32,10 +32,6 @@ export default async function AgencyDetailPage({
       },
       premiumBuckets: true,
       valuePolicyDefaults: true,
-      teams: {
-        orderBy: { name: "asc" },
-        include: { roles: { orderBy: { name: "asc" } }, people: { orderBy: { fullName: "asc" } } },
-      },
       householdFieldDefinitions: {
         orderBy: { fieldName: "asc" },
       },
@@ -52,6 +48,12 @@ export default async function AgencyDetailPage({
       </AppShell>
     );
   }
+
+  const teams = await prisma.team.findMany({
+    where: { orgId: agency.orgId },
+    orderBy: { name: "asc" },
+    include: { roles: { orderBy: { name: "asc" } }, people: { orderBy: { fullName: "asc" } } },
+  });
 
   async function updateProfile(formData: FormData) {
     "use server";
@@ -104,7 +106,7 @@ export default async function AgencyDetailPage({
     "use server";
     const name = String(formData.get("teamName") || "").trim();
     if (!name) return;
-    await prisma.team.create({ data: { agencyId, name } });
+    await prisma.team.create({ data: { orgId: agency.orgId, name } });
     revalidatePath(`/agencies/${agencyId}`);
   }
 
@@ -514,7 +516,7 @@ export default async function AgencyDetailPage({
         >
           <div style={{ fontWeight: 800, fontSize: 16 }}>Teams & Roles</div>
           <div style={{ display: "grid", gap: 12 }}>
-            {agency.teams.map((team) => (
+            {teams.map((team) => (
               <div key={team.id} style={{ border: "1px solid #e3e6eb", borderRadius: 10, padding: 12, background: "#f8fafc" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 700 }}>Team</span>

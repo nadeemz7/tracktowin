@@ -18,10 +18,7 @@ export default async function CompPlansPage() {
   const people = await prisma.person.findMany({
     where: activeAgency
       ? {
-          OR: [
-            { primaryAgencyId: activeAgency.id },
-            { team: { agencyId: activeAgency.id } },
-          ],
+          OR: [{ primaryAgencyId: activeAgency.id }],
         }
       : {},
     orderBy: { fullName: "asc" },

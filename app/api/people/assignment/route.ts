@@ -1,31 +1,33 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getViewerContext } from "@/lib/getViewerContext";
-import { hasBenchmarksWriteAccess } from "@/lib/benchmarks/guards";
+import { getOrgViewer } from "@/lib/getOrgViewer";
 
 export async function POST(req: Request) {
   try {
-    const viewer = await getViewerContext(req);
+    const viewer = await getOrgViewer(req);
     if (!viewer?.orgId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (!hasBenchmarksWriteAccess(viewer)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const permissions = viewer?.permissions ?? [];
+    const canManagePeople = Boolean(
+      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
+    );
+    if (!canManagePeople) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const body = (await req.json().catch(() => ({}))) as any;
     const personId = typeof body.personId === "string" ? body.personId.trim() : "";
     if (!personId) return NextResponse.json({ error: "personId required" }, { status: 400 });
 
-    const person = await prisma.person.findUnique({
-      where: { id: personId },
-      include: { team: true },
+    const person = await prisma.person.findFirst({
+      where: { id: personId, orgId: viewer.orgId },
     });
-    if (!person || person.primaryAgencyId !== viewer.orgId) {
+    if (!person) {
       return NextResponse.json({ error: "Person not found in org" }, { status: 404 });
     }
 
     // Validate optional teamId
     const teamId = "teamId" in body ? (body.teamId ? String(body.teamId) : null) : undefined;
     if (teamId !== undefined && teamId !== null) {
-      const team = await prisma.team.findUnique({ where: { id: teamId } });
-      if (!team || team.agencyId !== viewer.orgId) {
+      const team = await prisma.team.findFirst({ where: { id: teamId, orgId: viewer.orgId } });
+      if (!team) {
         return NextResponse.json({ error: "Team not found in org" }, { status: 404 });
       }
     }
@@ -33,17 +35,20 @@ export async function POST(req: Request) {
     // Validate optional roleId
     const roleId = "roleId" in body ? (body.roleId ? String(body.roleId) : null) : undefined;
     if (roleId !== undefined && roleId !== null) {
-      const role = await prisma.role.findUnique({ where: { id: roleId }, include: { team: true } });
-      if (!role || role.team?.agencyId !== viewer.orgId) {
+      const role = await prisma.role.findFirst({ where: { id: roleId, team: { orgId: viewer.orgId } } });
+      if (!role) {
         return NextResponse.json({ error: "Role not found in org" }, { status: 404 });
       }
     }
 
-    // Validate optional primaryAgencyId (must be viewer org or null)
+    // Validate optional primaryAgencyId (must belong to viewer org or be null)
     const primaryAgencyId =
       "primaryAgencyId" in body ? (body.primaryAgencyId ? String(body.primaryAgencyId) : null) : undefined;
-    if (primaryAgencyId !== undefined && primaryAgencyId !== null && primaryAgencyId !== viewer.orgId) {
-      return NextResponse.json({ error: "primaryAgencyId must match viewer org" }, { status: 400 });
+    if (primaryAgencyId !== undefined && primaryAgencyId !== null) {
+      const agency = await prisma.agency.findFirst({ where: { id: primaryAgencyId, orgId: viewer.orgId } });
+      if (!agency) {
+        return NextResponse.json({ error: "Primary office not found in org" }, { status: 404 });
+      }
     }
 
     const payload: any = {};
@@ -57,7 +62,7 @@ export async function POST(req: Request) {
     const updated = await prisma.person.update({
       where: { id: personId },
       data: payload,
-      include: { role: true, team: { include: { agency: true } }, primaryAgency: true },
+      include: { role: true, team: true, primaryAgency: true },
     });
 
     return NextResponse.json({ person: updated });

@@ -121,9 +121,9 @@ async function upsertAgencyWithData(name: string, profileName: string): Promise<
   const teams = ["Sales", "Customer Service"];
   const teamMap = new Map<string, string>();
   for (const t of teams) {
-    let team = await prisma.team.findFirst({ where: { agencyId: agency.id, name: t } });
+    let team = await prisma.team.findFirst({ where: { orgId: agency.orgId, name: t } });
     if (!team) {
-      team = await prisma.team.create({ data: { agencyId: agency.id, name: t } });
+      team = await prisma.team.create({ data: { orgId: agency.orgId, name: t } });
     }
     teamMap.set(t, team.id);
     const defaultRoles = t === "Sales" ? ["Sales Associate", "Senior Sales"] : ["CS Rep", "CS Specialist"];

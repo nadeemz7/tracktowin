@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { getViewerContext } from "@/lib/getViewerContext";
-import { cookies } from "next/headers";
+import { ALL_PERMISSIONS, PERMISSION_DEFINITIONS, ROLE_PERMISSION_DEFAULTS } from "@/lib/permissions";
+import { cookies, headers } from "next/headers";
+
+export { ALL_PERMISSIONS, PERMISSION_DEFINITIONS, ROLE_PERMISSION_DEFAULTS };
 
 export type OrgViewer = {
   personId: string | null;
@@ -9,6 +12,8 @@ export type OrgViewer = {
   isOwner: boolean;
   isManager: boolean;
   impersonating: boolean;
+  roleKeys: string[];
+  permissions: string[];
 };
 
 function safeCookieGet(name: string): string | null {
@@ -28,12 +33,42 @@ function roleToString(role: any): string {
   return "";
 }
 
-export async function getOrgViewer(req: Request): Promise<OrgViewer> {
-  const base: any = await getViewerContext(req).catch(() => null);
+async function resolveRoleAssignments(personId: string, orgId: string | null) {
+  if (!orgId) return { roleKeys: [], permissions: [] };
+  const roleAssignments = await prisma.personOrgRole.findMany({
+    where: { personId, role: { orgId } },
+    include: { role: { include: { permissions: true } } },
+  });
+  const roleKeys = Array.from(
+    new Set(
+      roleAssignments
+        .map((assignment) => assignment.role.key)
+        .filter((key): key is string => Boolean(key))
+    )
+  );
+  const permissions = Array.from(
+    new Set(
+      roleAssignments
+        .flatMap((assignment) => assignment.role.permissions.map((p) => p.permission))
+        .filter((permission): permission is string => Boolean(permission))
+    )
+  );
+  return { roleKeys, permissions };
+}
+
+export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
+  let request = req;
+  if (!request) {
+    const hStore: any = headers();
+    const h = hStore && typeof hStore.then === "function" ? await hStore : hStore;
+    request = new Request("http://localhost", { headers: h });
+  }
+
+  const base: any = await getViewerContext(request).catch(() => null);
 
   const headerImpersonate =
-    req.headers.get("x-impersonate-person-id") ||
-    req.headers.get("x-impersonate-id") ||
+    request.headers.get("x-impersonate-person-id") ||
+    request.headers.get("x-impersonate-id") ||
     null;
 
   const cookieImpersonate = safeCookieGet("impersonatePersonId");
@@ -58,41 +93,27 @@ export async function getOrgViewer(req: Request): Promise<OrgViewer> {
       }));
 
     if (preferred) {
+      const orgId = preferred.orgId ?? null;
+      const { roleKeys, permissions } = await resolveRoleAssignments(preferred.id, orgId);
+      const roleKeySet = new Set(roleKeys);
       const roleValue = roleToString(preferred.role).toUpperCase();
-      let isAdmin = Boolean(preferred.isAdmin) || roleValue === "ADMIN";
-      const isManager = Boolean(preferred.isManager) || roleValue === "MANAGER";
-      const isOwner = roleValue === "OWNER";
+      let isAdmin = roleKeySet.has("ORG_ADMIN") || Boolean(preferred.isAdmin) || roleValue === "ADMIN";
+      const isManager = Boolean(preferred.isManager);
+      const isOwner = roleKeySet.has("ORG_OWNER") || (Boolean(preferred.isAdmin) && roleKeys.length === 0);
 
       if (!isAdmin && !isManager && !isOwner) isAdmin = true;
 
-      let orgId =
-        preferred.primaryAgency?.id ||
-        preferred.primaryAgencyId ||
-        preferred.team?.agencyId ||
-        null;
-
-      if (!orgId) {
-        const anyAgency = await prisma.agency.findFirst({
-          orderBy: { createdAt: "asc" },
-          select: { id: true },
-        });
-        orgId = anyAgency?.id || null;
-      }
-
-      return { personId: preferred.id, orgId, isAdmin, isOwner, isManager, impersonating: false };
+      return {
+        personId: preferred.id,
+        orgId,
+        isAdmin,
+        isOwner,
+        isManager,
+        impersonating: false,
+        roleKeys,
+        permissions,
+      };
     }
-  }
-
-  // Normal path
-  if (base?.personId && !headerImpersonate && !cookieImpersonate) {
-    return {
-      personId: base.personId ?? null,
-      orgId: base.orgId ?? null,
-      isAdmin: Boolean(base.isAdmin),
-      isOwner: Boolean(base.isOwner),
-      isManager: Boolean(base.isManager),
-      impersonating: false,
-    };
   }
 
   const effectivePersonId =
@@ -113,6 +134,8 @@ export async function getOrgViewer(req: Request): Promise<OrgViewer> {
       isOwner: Boolean(base?.isOwner),
       isManager: Boolean(base?.isManager),
       impersonating: false,
+      roleKeys: [],
+      permissions: [],
     };
   }
 
@@ -130,19 +153,18 @@ export async function getOrgViewer(req: Request): Promise<OrgViewer> {
         isOwner: Boolean(base?.isOwner),
         isManager: Boolean(base?.isManager),
         impersonating: Boolean(headerImpersonate || cookieImpersonate),
+        roleKeys: [],
+        permissions: [],
       };
     }
 
+    const orgId = person.orgId ?? null;
+    const { roleKeys, permissions } = await resolveRoleAssignments(person.id, orgId);
+    const roleKeySet = new Set(roleKeys);
     const roleValue = roleToString(person.role).toUpperCase();
-    const isAdmin = Boolean(person.isAdmin) || roleValue === "ADMIN";
-    const isManager = Boolean(person.isManager) || roleValue === "MANAGER";
-    const isOwner = roleValue === "OWNER";
-
-    const orgId =
-      person.primaryAgency?.id ||
-      person.primaryAgencyId ||
-      person.team?.agencyId ||
-      null;
+    const isOwner = roleKeySet.has("ORG_OWNER") || (Boolean(person.isAdmin) && roleKeys.length === 0);
+    const isAdmin = roleKeySet.has("ORG_ADMIN") || Boolean(person.isAdmin) || roleValue === "ADMIN";
+    const isManager = Boolean(person.isManager);
 
     return {
       personId: person.id,
@@ -151,6 +173,8 @@ export async function getOrgViewer(req: Request): Promise<OrgViewer> {
       isOwner,
       isManager,
       impersonating: Boolean(headerImpersonate || cookieImpersonate),
+      roleKeys,
+      permissions,
     };
   } catch (err) {
     console.error("[getOrgViewer] error", err);
@@ -161,6 +185,8 @@ export async function getOrgViewer(req: Request): Promise<OrgViewer> {
       isOwner: Boolean(base?.isOwner),
       isManager: Boolean(base?.isManager),
       impersonating: Boolean(headerImpersonate || cookieImpersonate),
+      roleKeys: [],
+      permissions: [],
     };
   }
 }

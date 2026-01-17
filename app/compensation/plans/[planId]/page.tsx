@@ -435,9 +435,9 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
   const missingBucketCount = missingBucketRefs.length;
   const topMissingBuckets = [...missingBucketRefs].sort((a, b) => b.missingCount - a.missingCount).slice(0, 3);
 
-  const teams = await prisma.team.findMany({ where: agencyId ? { agencyId } : {}, orderBy: { name: "asc" }, include: { roles: true } });
+  const teams = await prisma.team.findMany({ orderBy: { name: "asc" }, include: { roles: true } });
   const people = await prisma.person.findMany({
-    where: agencyId ? { team: { agencyId } } : {},
+    where: agencyId ? { primaryAgencyId: agencyId } : {},
     orderBy: { fullName: "asc" },
     include: { team: true, role: true },
   });

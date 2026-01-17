@@ -230,7 +230,7 @@ export default async function ActivityManager({
   const selectedPerson = selectedPersonId ? people.find((p) => p.id === selectedPersonId) : undefined;
   const personName = selectedPerson?.fullName || "Unassigned";
   const teamId = selectedPerson?.teamId || null;
-  const agencyId = selectedPerson?.primaryAgencyId || selectedPerson?.team?.agencyId || null;
+  const agencyId = selectedPerson?.primaryAgencyId || null;
 
   const rawActivityTypes = await prisma.activityType.findMany({
     where: {

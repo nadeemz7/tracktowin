@@ -74,7 +74,7 @@ export default async function AgenciesPage() {
       const [primarySales, primaryCs, activeMembers] = await Promise.all([
         prisma.person.count({ where: { primaryAgencyId: a.id, teamType: "SALES", active: true } }),
         prisma.person.count({ where: { primaryAgencyId: a.id, teamType: "CS", active: true } }),
-        prisma.person.count({ where: { team: { agencyId: a.id }, active: true } }),
+        prisma.person.count({ where: { primaryAgencyId: a.id, active: true } }),
       ]);
       return { id: a.id, primarySales, primaryCs, activeMembers };
     })
@@ -106,7 +106,7 @@ export default async function AgenciesPage() {
       },
     });
 
-    await (await import("@/lib/wtdDefaults")).ensureDefaultWinTheDayPlans(agency.id);
+    await (await import("@/lib/wtdDefaults")).ensureDefaultWinTheDayPlans(agency.id, agency.orgId);
 
     revalidatePath("/agencies");
   }
@@ -135,7 +135,7 @@ export default async function AgenciesPage() {
       },
     });
 
-    await (await import("@/lib/wtdDefaults")).ensureDefaultWinTheDayPlans(agency.id);
+    await (await import("@/lib/wtdDefaults")).ensureDefaultWinTheDayPlans(agency.id, agency.orgId);
 
     revalidatePath("/agencies");
   }
@@ -154,12 +154,8 @@ export default async function AgenciesPage() {
       prisma.commissionPlan.deleteMany({ where: { id: { in: plans.map((p) => p.id) } } }),
       prisma.winTheDayPlanPersonAssignment.deleteMany({ where: { planId: { in: wtdPlans.map((p) => p.id) } } }),
       prisma.winTheDayPlanTeamAssignment.deleteMany({ where: { planId: { in: wtdPlans.map((p) => p.id) } } }),
-      prisma.winTheDayPlanTeamAssignment.deleteMany({ where: { team: { agencyId: id } } }),
-      prisma.winTheDayPlanPersonAssignment.deleteMany({ where: { person: { team: { agencyId: id } } } }),
       prisma.winTheDayRule.deleteMany({ where: { planId: { in: wtdPlans.map((p) => p.id) } } }),
       prisma.winTheDayPlan.deleteMany({ where: { id: { in: wtdPlans.map((p) => p.id) } } }),
-      prisma.activityTeamVisibility.deleteMany({ where: { team: { agencyId: id } } }),
-      prisma.activityDailyExpectation.deleteMany({ where: { team: { agencyId: id } } }),
       prisma.activityPayoutTier.deleteMany({ where: { activityType: { agencyId: id } } }),
       prisma.activityType.deleteMany({ where: { agencyId: id } }),
       prisma.soldProduct.deleteMany({ where: { agencyId: id } }),
@@ -169,9 +165,6 @@ export default async function AgenciesPage() {
       prisma.householdFieldDefinition.deleteMany({ where: { agencyId: id } }),
       prisma.valuePolicyDefault.deleteMany({ where: { agencyId: id } }),
       prisma.premiumBucket.deleteMany({ where: { agencyId: id } }),
-      prisma.person.updateMany({ where: { team: { agencyId: id } }, data: { teamId: null, roleId: null } }),
-      prisma.role.deleteMany({ where: { team: { agencyId: id } } }),
-      prisma.team.deleteMany({ where: { agencyId: id } }),
       prisma.product.deleteMany({ where: { lineOfBusiness: { agencyId: id } } }),
       prisma.lineOfBusiness.deleteMany({ where: { agencyId: id } }),
       prisma.agency.delete({ where: { id } }),

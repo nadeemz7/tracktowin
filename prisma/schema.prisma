@@ -6,6 +6,9 @@ datasource db {
   provider = "postgresql"
 }
 
+// Candidate migration: org-scoped products
+// Impacted models: Product, LineOfBusiness, SoldProduct, PremiumBucket, Comp rules (applyFilters/productIds), onboarding seeds
+
 model Org {
   id        String   @id @default(cuid())
   name      String
@@ -13,6 +16,7 @@ model Org {
   updatedAt DateTime @updatedAt
 
   agencies  Agency[]
+  teams     Team[]
   people    Person[]
   roles     OrgRole[]
 }
@@ -86,13 +90,15 @@ model Agency {
   reportSnapshots           ReportSnapshot[]
   benchOfficePlans          BenchOfficePlan[]
   soldProducts              SoldProduct[]
-  teams                     Team[]
   valuePolicyDefaults       ValuePolicyDefault[]
   winTheDayPlans            WinTheDayPlan[]
 
   @@index([orgId])
 }
 
+// LineOfBusiness scope: agency-scoped via agencyId (no orgId field on this model).
+// Foreign keys: agencyId -> Agency.
+// Usage: Product.lineOfBusinessId; referenced by SoldProduct via Product; comp filters by LOB; PremiumBucket includesLobs by name.
 model LineOfBusiness {
   id                     String                  @id @default(cuid())
   agencyId               String
@@ -107,6 +113,9 @@ model LineOfBusiness {
   @@unique([agencyId, name])
 }
 
+// Product scope: agency-scoped via lineOfBusinessId -> LineOfBusiness (which is agency-scoped).
+// Foreign keys: lineOfBusinessId -> LineOfBusiness (no orgId/agencyId field on Product).
+// Usage: SoldProduct.productId; comp rules applyFilters.productIds; PremiumBucket includesProducts by name.
 model Product {
   id               String         @id @default(cuid())
   lineOfBusinessId String
@@ -316,7 +325,7 @@ model HouseholdFieldValue {
 
 model Team {
   id                   String                       @id @default(cuid())
-  agencyId             String
+  orgId                String
   name                 String
   active               Boolean                      @default(true)
   createdAt            DateTime                     @default(now())
@@ -326,10 +335,11 @@ model Team {
   commissionPlans      CommissionPlan[]
   people               Person[]
   roles                Role[]
-  agency               Agency                       @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  winAssignments       WinTheDayPlanTeamAssignment?
+  org                  Org                          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  winAssignments       WinTheDayPlanTeamAssignment[] @relation("WTDTeamAssignments")
 
-  @@unique([agencyId, name])
+  @@unique([orgId, name])
+  @@index([orgId])
 }
 
 model Role {
@@ -550,13 +560,15 @@ model WinTheDayRule {
 model WinTheDayPlanTeamAssignment {
   id        String        @id @default(cuid())
   planId    String
-  teamId    String        @unique
+  teamId    String
   active    Boolean       @default(true)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   plan      WinTheDayPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
-  team      Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team      Team          @relation("WTDTeamAssignments", fields: [teamId], references: [id], onDelete: Cascade)
 
+  @@unique([planId, teamId])
+  @@index([teamId])
   @@index([planId])
 }
 

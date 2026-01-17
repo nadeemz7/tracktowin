@@ -6,6 +6,7 @@ type ViewerDebug = {
   userId?: string | null;
   viewerPersonId?: string | null;
   ttw_personId?: string | null;
+  xImpersonatePersonId?: string | null;
   impersonatePersonId?: string | null;
   effectivePersonId?: string | null;
   reason?: string;
@@ -29,10 +30,11 @@ export async function getViewerContext(req?: Request) {
     userId: await readCookie("userId"),
     viewerPersonId: await readCookie("viewerPersonId"),
     ttw_personId: await readCookie("ttw_personId"),
+    xImpersonatePersonId: await readCookie("x-impersonate-person-id"),
     impersonatePersonId: await readCookie("impersonatePersonId"),
   };
 
-  let impersonatePersonId: string | null = dbg.impersonatePersonId || null;
+  let impersonatePersonId: string | null = dbg.xImpersonatePersonId || dbg.impersonatePersonId || null;
   let loggedInPersonId: string | null =
     dbg.personId || dbg.userId || dbg.viewerPersonId || dbg.ttw_personId || null;
 
@@ -93,21 +95,24 @@ export async function getViewerContext(req?: Request) {
   const isManager = Boolean((person as any).isManager) || roleValue === "MANAGER";
 
   const agencyId = person.primaryAgency?.id || person.primaryAgencyId || null;
+  const agencyName = person.primaryAgency?.name ?? null;
   if (!agencyId) {
-    console.error("getViewerContext: missing agencyId for viewer", {
+    console.warn("getViewerContext: missing agencyId for viewer", {
       personId: person.id,
       primaryAgencyId: person.primaryAgencyId,
     });
-    lastViewerDebug = { ...dbg, reason: "missing_agency", effectivePersonId };
-    return null;
   }
 
-  const orgId = agencyId;
-  lastViewerDebug = { ...dbg, reason: "ok" };
+  const orgId = person.orgId ?? null;
+  if (orgId) {
+    lastViewerDebug = { ...dbg, reason: "ok" };
+  }
 
   const viewer = {
     personId: person.id,
     orgId,
+    agencyId,
+    agencyName,
     isAdmin,
     isManager,
     isOwner,

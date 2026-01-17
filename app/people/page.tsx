@@ -259,6 +259,107 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
   const agencyById = new Map(agencies.map((agency) => [agency.id, agency]));
   const teamById = new Map(teams.map((team) => [team.id, team]));
   const roleById = new Map(roles.map((role) => [role.id, role]));
+  const agencyIndexById = new Map(agencies.map((agency, index) => [agency.id, index]));
+  const teamIndexById = new Map(teams.map((team, index) => [team.id, index]));
+  const noAgencyLabel = "No primary office";
+  const noTeamLabel = "No team";
+  const noRoleLabel = "No role";
+  const formatPeopleCount = (count: number) => (count === 1 ? "1 person" : `${count} people`);
+  const getAgencyLabel = (agencyId: string | null) => {
+    if (!agencyId) return noAgencyLabel;
+    return agencies.find((agency) => agency.id === agencyId)?.name ?? "Unknown primary office";
+  };
+  const getTeamLabel = (teamId: string | null, teamName?: string | null) => {
+    if (!teamId) return noTeamLabel;
+    return teamName ?? teams.find((team) => team.id === teamId)?.name ?? "Unknown team";
+  };
+  const getRoleLabel = (roleId: string | null, roleName?: string | null) => {
+    if (!roleId) return noRoleLabel;
+    if (roleName) return roleName;
+    for (const team of teams) {
+      const foundRole = team.roles.find((role) => role.id === roleId);
+      if (foundRole) return foundRole.name;
+    }
+    return "Unknown role";
+  };
+  const orgStructureMap = new Map();
+  peopleDirectory.forEach((person) => {
+    const agencyId = person.primaryAgencyId ?? null;
+    const agencyKey = agencyId ?? "__no_agency__";
+    const agencyLabel = getAgencyLabel(agencyId);
+    let agencyGroup = orgStructureMap.get(agencyKey);
+    if (!agencyGroup) {
+      const agencyOrder = agencyId ? agencyIndexById.get(agencyId) ?? agencies.length : Number.MAX_SAFE_INTEGER;
+      agencyGroup = {
+        id: agencyId,
+        label: agencyLabel,
+        count: 0,
+        order: agencyOrder,
+        teams: new Map(),
+      };
+      orgStructureMap.set(agencyKey, agencyGroup);
+    }
+    agencyGroup.count += 1;
+
+    const teamId = person.teamId ?? null;
+    const teamKey = teamId ?? "__no_team__";
+    const teamLabel = getTeamLabel(teamId, person.team?.name);
+    let teamGroup = agencyGroup.teams.get(teamKey);
+    if (!teamGroup) {
+      const teamOrder = teamId ? teamIndexById.get(teamId) ?? teams.length : Number.MAX_SAFE_INTEGER;
+      teamGroup = {
+        id: teamId,
+        label: teamLabel,
+        count: 0,
+        order: teamOrder,
+        roles: new Map(),
+      };
+      agencyGroup.teams.set(teamKey, teamGroup);
+    }
+    teamGroup.count += 1;
+
+    const roleId = person.roleId ?? null;
+    const roleKey = roleId ?? "__no_role__";
+    const roleLabel = getRoleLabel(roleId, person.role?.name);
+    let roleGroup = teamGroup.roles.get(roleKey);
+    if (!roleGroup) {
+      roleGroup = {
+        id: roleId,
+        label: roleLabel,
+        count: 0,
+        isFallback: !roleId,
+        people: [],
+      };
+      teamGroup.roles.set(roleKey, roleGroup);
+    }
+    roleGroup.count += 1;
+    roleGroup.people.push({ id: person.id, name: person.fullName });
+  });
+  const orgStructure = Array.from(orgStructureMap.values())
+    .map((agencyGroup) => {
+      const teams = Array.from(agencyGroup.teams.values())
+        .map((teamGroup) => {
+          const roles = Array.from(teamGroup.roles.values())
+            .map((roleGroup) => ({
+              ...roleGroup,
+              people: [...roleGroup.people].sort((a, b) => a.name.localeCompare(b.name)),
+            }))
+            .sort((a, b) => {
+              if (a.isFallback !== b.isFallback) return a.isFallback ? 1 : -1;
+              return a.label.localeCompare(b.label);
+            });
+          return { ...teamGroup, roles };
+        })
+        .sort((a, b) => {
+          if (a.order !== b.order) return a.order - b.order;
+          return a.label.localeCompare(b.label);
+        });
+      return { ...agencyGroup, teams };
+    })
+    .sort((a, b) => {
+      if (a.order !== b.order) return a.order - b.order;
+      return a.label.localeCompare(b.label);
+    });
   const searchQueryLower = searchQuery.toLowerCase();
   const filteredPeople = peopleDirectory.filter((person) => {
     if (selectedAgencyId) {
@@ -312,6 +413,34 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
     if (role.team?.id) params.set("teamId", role.team.id);
     return buildHref(params);
   };
+  const buildAgencyFilterHref = (agencyId: string) => {
+    const params = new URLSearchParams();
+    params.set("tab", "people");
+    params.set("agencyId", agencyId);
+    if (searchQuery) params.set("q", searchQuery);
+    return buildHref(params);
+  };
+  const buildTeamFilterHrefWithinOrgStructure = (agencyId: string | null, teamId: string) => {
+    const params = new URLSearchParams();
+    params.set("tab", "people");
+    params.set("teamId", teamId);
+    if (agencyId) params.set("agencyId", agencyId);
+    if (searchQuery) params.set("q", searchQuery);
+    return buildHref(params);
+  };
+  const buildRoleFilterHrefWithinOrgStructure = (
+    agencyId: string | null,
+    teamId: string | null,
+    roleId: string
+  ) => {
+    const params = new URLSearchParams();
+    params.set("tab", "people");
+    params.set("roleId", roleId);
+    if (teamId) params.set("teamId", teamId);
+    if (agencyId) params.set("agencyId", agencyId);
+    if (searchQuery) params.set("q", searchQuery);
+    return buildHref(params);
+  };
   const buildPersonHref = (personId: string) => {
     const params = new URLSearchParams();
     params.set("tab", "people");
@@ -362,51 +491,122 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
               style={{ padding: 12, height: 520, display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
             >
               <div style={{ fontWeight: 800 }}>Org Structure</div>
-              <div style={{ flex: "1 1 auto", overflow: "auto" }}>
-                {agencies.length === 0 ? (
-                  <div style={{ color: "#6b7280", fontSize: 13 }}>No agencies found.</div>
+              <div style={{ flex: "1 1 auto", overflow: "auto", display: "grid", gap: 12 }}>
+                {orgStructure.length === 0 ? (
+                  <div style={{ color: "#6b7280", fontSize: 13 }}>No people found.</div>
                 ) : (
-                  <div style={{ display: "grid", gap: 12 }}>
-                    {agencies.map((agency) => {
-                      const agencyParams = new URLSearchParams(baseParams);
-                      agencyParams.set("agencyId", agency.id);
-                      agencyParams.delete("teamId");
-                      agencyParams.delete("roleId");
-                      const agencyHref = buildHref(agencyParams);
-                      const isAgencySelected = agency.id === selectedAgencyId;
-                      return (
-                        <div
-                          key={agency.id}
+                  orgStructure.map((agencyGroup) => (
+                    <div
+                      key={agencyGroup.id ?? "no-agency"}
+                      style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, display: "grid", gap: 8 }}
+                    >
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        {agencyGroup.id ? (
+                          <a
+                            href={buildAgencyFilterHref(agencyGroup.id)}
+                            style={{ fontWeight: 800, fontSize: 15, textDecoration: "underline", color: "#2563eb" }}
+                          >
+                            {agencyGroup.label}
+                          </a>
+                        ) : (
+                          <div style={{ fontWeight: 800, fontSize: 15 }}>{agencyGroup.label}</div>
+                        )}
+                        <span
                           style={{
-                            border: "1px solid #e5e7eb",
-                            borderRadius: 10,
-                            padding: 10,
-                            display: "grid",
-                            gap: 8,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            textTransform: "uppercase",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 999,
+                            padding: "2px 6px",
+                            color: "#475569",
+                            background: "#f8fafc",
                           }}
                         >
-                          <a
-                            href={agencyHref}
-                            title={agency.name}
+                          {agencyGroup.id ? "Agency" : "Unassigned"}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>{formatPeopleCount(agencyGroup.count)}</div>
+                      <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
+                        {agencyGroup.teams.map((teamGroup) => (
+                          <div
+                            key={teamGroup.id ?? "no-team"}
                             style={{
-                              fontWeight: 800,
-                              fontSize: 15,
-                              textDecoration: "none",
-                              color: "inherit",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              padding: isAgencySelected ? "2px 6px" : "0",
-                              borderRadius: 6,
-                              border: isAgencySelected ? "1px solid #cbd5e1" : "1px solid transparent",
-                              background: isAgencySelected ? "#f8fafc" : "transparent",
+                              border: "1px solid #f1f5f9",
+                              borderRadius: 8,
+                              padding: "8px 10px",
+                              display: "grid",
+                              gap: 6,
+                              background: "#fff",
                             }}
                           >
-                            {agency.name}
-                          </a>
-                        </div>
-                      );
-                    })}
-                  </div>
+                            {teamGroup.id ? (
+                              <a
+                                href={buildTeamFilterHrefWithinOrgStructure(agencyGroup.id ?? null, teamGroup.id)}
+                                style={{ fontWeight: 700, textDecoration: "underline", color: "#2563eb" }}
+                              >
+                                {teamGroup.label}
+                              </a>
+                            ) : (
+                              <div style={{ fontWeight: 700 }}>{teamGroup.label}</div>
+                            )}
+                            <div style={{ fontSize: 12, color: "#64748b" }}>{formatPeopleCount(teamGroup.count)}</div>
+                            <div style={{ display: "grid", gap: 6 }}>
+                              {teamGroup.roles.map((roleGroup) => (
+                                <div
+                                  key={roleGroup.id ?? "no-role"}
+                                  style={{ borderLeft: "2px solid #e2e8f0", paddingLeft: 8, display: "grid", gap: 4 }}
+                                >
+                                  <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                                    {roleGroup.id ? (
+                                      <a
+                                        href={buildRoleFilterHrefWithinOrgStructure(
+                                          agencyGroup.id ?? null,
+                                          teamGroup.id ?? null,
+                                          roleGroup.id
+                                        )}
+                                        style={{ fontWeight: 600, textDecoration: "underline", color: "#2563eb" }}
+                                      >
+                                        {roleGroup.label}
+                                      </a>
+                                    ) : (
+                                      <div style={{ fontWeight: 600 }}>{roleGroup.label}</div>
+                                    )}
+                                    <div style={{ fontSize: 12, color: "#6b7280" }}>
+                                      {formatPeopleCount(roleGroup.count)}
+                                    </div>
+                                  </div>
+                                  {roleGroup.people.length ? (
+                                    <div
+                                      style={{
+                                        display: "flex",
+                                        flexWrap: "wrap",
+                                        gap: "4px 10px",
+                                        fontSize: 12,
+                                        color: "#111827",
+                                      }}
+                                    >
+                                      {roleGroup.people.map((person) => (
+                                        <a
+                                          key={person.id}
+                                          href={`${buildPersonHref(person.id)}#people-editor`}
+                                          style={{ padding: "2px 0", textDecoration: "underline", color: "#2563eb" }}
+                                        >
+                                          {person.name}
+                                        </a>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div style={{ fontSize: 12, color: "#94a3b8" }}>No people assigned.</div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
                 )}
               </div>
             </div>

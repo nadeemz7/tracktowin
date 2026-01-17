@@ -1,5 +1,6 @@
 import { AppShell } from "@/app/components/AppShell";
 import ConfirmSubmitButton from "@/app/components/ConfirmSubmitButton";
+import { getOrgViewer } from "@/lib/getOrgViewer";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
@@ -59,7 +60,18 @@ const STARTER_LOBS = [
 ];
 
 export default async function AgenciesPage() {
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId) {
+    return (
+      <AppShell title="Unauthorized">
+        <div>Unauthorized.</div>
+      </AppShell>
+    );
+  }
+
   const agencies = await prisma.agency.findMany({
+    where: { orgId },
     orderBy: { createdAt: "desc" },
     include: {
       linesOfBusiness: {
@@ -84,10 +96,14 @@ export default async function AgenciesPage() {
   async function createAgency(formData: FormData) {
     "use server";
 
+    const viewer: any = await getOrgViewer();
+    const orgId = viewer?.orgId ?? null;
+    if (!orgId) return;
+
     const name = String(formData.get("name") || "").trim();
     if (!name) return;
 
-    const exists = await prisma.agency.findFirst({ where: { name } });
+    const exists = await prisma.agency.findFirst({ where: { name, orgId } });
     if (exists) {
       revalidatePath("/agencies");
       return;
@@ -95,6 +111,7 @@ export default async function AgenciesPage() {
 
     const agency = await prisma.agency.create({
       data: {
+        orgId,
         name,
         linesOfBusiness: {
           create: STARTER_LOBS.map((lob) => ({
@@ -113,10 +130,14 @@ export default async function AgenciesPage() {
 
   async function quickCreate(formData: FormData) {
     "use server";
+    const viewer: any = await getOrgViewer();
+    const orgId = viewer?.orgId ?? null;
+    if (!orgId) return;
+
     const name = String(formData.get("quickName") || "").trim();
     if (!name) return;
 
-    const exists = await prisma.agency.findFirst({ where: { name } });
+    const exists = await prisma.agency.findFirst({ where: { name, orgId } });
     if (exists) {
       revalidatePath("/agencies");
       return;
@@ -124,6 +145,7 @@ export default async function AgenciesPage() {
 
     const agency = await prisma.agency.create({
       data: {
+        orgId,
         name,
         linesOfBusiness: {
           create: STARTER_LOBS.map((lob) => ({
@@ -144,6 +166,11 @@ export default async function AgenciesPage() {
     "use server";
     const id = String(formData.get("agencyId") || "");
     if (!id) return;
+    const viewer: any = await getOrgViewer();
+    const orgId = viewer?.orgId ?? null;
+    if (!orgId) return;
+    const agency = await prisma.agency.findFirst({ where: { id, orgId } });
+    if (!agency) return;
 
     const plans = await prisma.commissionPlan.findMany({ where: { agencyId: id }, select: { id: true } });
     const wtdPlans = await prisma.winTheDayPlan.findMany({ where: { agencyId: id }, select: { id: true } });
@@ -175,16 +202,28 @@ export default async function AgenciesPage() {
 
   async function addPerson(formData: FormData) {
     "use server";
+    const viewer: any = await getOrgViewer();
+    const orgId = viewer?.orgId ?? null;
+    if (!orgId) return;
+    const permissions = viewer?.permissions ?? [];
+    const canManagePeople = Boolean(
+      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
+    );
+    if (!canManagePeople) return;
+
     const fullName = String(formData.get("fullName") || "").trim();
     const email = String(formData.get("email") || "").trim();
     const teamType = String(formData.get("teamType") || "SALES");
     const primaryAgencyId = String(formData.get("primaryAgencyId") || "");
     if (!fullName || !primaryAgencyId) return;
+    const agency = await prisma.agency.findFirst({ where: { id: primaryAgencyId, orgId } });
+    if (!agency) return;
     await prisma.person.create({
       data: {
         fullName,
         email: email || null,
         teamType: teamType === "CS" ? "CS" : "SALES",
+        orgId,
         primaryAgencyId,
         active: true,
       },
@@ -195,9 +234,21 @@ export default async function AgenciesPage() {
 
   async function updatePrimaryAgency(formData: FormData) {
     "use server";
+    const viewer: any = await getOrgViewer();
+    const orgId = viewer?.orgId ?? null;
+    const permissions = viewer?.permissions ?? [];
+    const canManagePeople = Boolean(
+      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
+    );
+    if (!orgId || !canManagePeople) return;
+
     const personId = String(formData.get("personId") || "");
     const primaryAgencyId = String(formData.get("primaryAgencyId") || "");
     if (!personId || !primaryAgencyId) return;
+    const agency = await prisma.agency.findFirst({ where: { id: primaryAgencyId, orgId } });
+    if (!agency) return;
+    const person = await prisma.person.findFirst({ where: { id: personId, orgId } });
+    if (!person) return;
     await prisma.person.update({ where: { id: personId }, data: { primaryAgencyId } });
     revalidatePath("/agencies");
     revalidatePath(`/agencies/${primaryAgencyId}`);

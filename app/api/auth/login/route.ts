@@ -31,13 +31,12 @@ function withAuthCookie(res: NextResponse, token: string) {
 
 function buildAuthResponse(
   req: Request,
-  user: { id: string; username: string; onboardingCompleted?: boolean },
+  user: { id: string; username: string },
   message: string,
   token: string,
   forceOnboarding: boolean
 ) {
-  const needsOnboarding = forceOnboarding || user.onboardingCompleted === false;
-  if (needsOnboarding) {
+  if (forceOnboarding) {
     const res = NextResponse.redirect(new URL("/onboarding", req.url));
     withAuthCookie(res, token);
     return res;
@@ -50,7 +49,13 @@ function buildAuthResponse(
 
 export async function POST(req: Request) {
   try {
-    let body: { username?: string; password?: string; action?: string };
+    let body: {
+      username?: string;
+      password?: string;
+      action?: string;
+      firstName?: string;
+      lastName?: string;
+    };
     try {
       body = await req.json();
     } catch {
@@ -60,6 +65,8 @@ export async function POST(req: Request) {
     const email = typeof body.username === "string" ? body.username.trim() : "";
     const password = typeof body.password === "string" ? body.password.trim() : "";
     const action = (typeof body.action === "string" ? body.action : "auto") as LoginAction;
+    const firstName = typeof body.firstName === "string" ? body.firstName.trim() : "";
+    const lastName = typeof body.lastName === "string" ? body.lastName.trim() : "";
 
     if (!email || !password) {
       return NextResponse.json({ message: "Invalid email or password" }, { status: 401 });
@@ -84,6 +91,8 @@ export async function POST(req: Request) {
         data: {
           email,
           password,
+          firstName: firstName || null,
+          lastName: lastName || null,
         },
       });
 
@@ -123,6 +132,8 @@ export async function POST(req: Request) {
         data: {
           email,
           password,
+          firstName: firstName || null,
+          lastName: lastName || null,
         },
       });
 

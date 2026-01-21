@@ -1,4 +1,5 @@
 "use server";
+import { getOrgViewer } from "@/lib/getOrgViewer";
 import { prisma } from "@/lib/prisma";
 import { PolicyStatus } from "@prisma/client";
 import { revalidatePath } from "next/cache";
@@ -119,7 +120,6 @@ export async function createSoldProduct(formData: FormData) {
 }
 
 export async function updateSoldProduct(formData: FormData) {
-  const intent = String(formData.get("intent") || "");
   const soldProductId = String(formData.get("soldProductId") || "");
   const status = String(formData.get("status") || PolicyStatus.WRITTEN);
   const dateSoldStr = String(formData.get("dateSold") || "");
@@ -128,48 +128,34 @@ export async function updateSoldProduct(formData: FormData) {
   const notes = String(formData.get("notes") || "").trim();
   const policyFirstName = String(formData.get("policyFirstName") || "").trim();
   const policyLastName = String(formData.get("policyLastName") || "").trim();
-  const applyToHousehold = formData.get("applyToHousehold") === "on";
-  const markIssued = intent === "issue";
   const returnTo = String(formData.get("returnTo") || "").trim();
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId) return;
 
   if (!soldProductId || !dateSoldStr || !premiumStr || !policyFirstName || !policyLastName) return;
+  const sp = await prisma.soldProduct.findUnique({
+    where: { id: soldProductId },
+    select: { id: true, agency: { select: { orgId: true } } },
+  });
+  if (!sp || sp.agency.orgId !== orgId) return;
 
   const premium = Number(premiumStr);
   if (Number.isNaN(premium)) return;
   const dateSold = new Date(dateSoldStr);
 
-  // fetch household to update names
-  const existing = await prisma.soldProduct.findUnique({
+  await prisma.soldProduct.update({
     where: { id: soldProductId },
-    include: { household: true },
+    data: {
+      dateSold,
+      premium,
+      status: status as PolicyStatus,
+      policyId: policyId || null,
+      notes: notes || null,
+      policyFirstName,
+      policyLastName,
+    },
   });
-  if (!existing) return;
-
-  const actions = [
-    prisma.soldProduct.update({
-      where: { id: soldProductId },
-      data: {
-        dateSold,
-        premium,
-        status: markIssued ? PolicyStatus.ISSUED : (status as PolicyStatus),
-        policyId: policyId || null,
-        notes: notes || null,
-        policyFirstName,
-        policyLastName,
-      },
-    }),
-  ];
-
-  if (applyToHousehold) {
-    actions.push(
-      prisma.household.update({
-        where: { id: existing.householdId },
-        data: { firstName: policyFirstName, lastName: policyLastName },
-      })
-    );
-  }
-
-  await prisma.$transaction(actions);
 
   revalidatePath("/sold-products");
   if (returnTo) {

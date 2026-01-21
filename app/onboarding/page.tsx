@@ -26,107 +26,109 @@ async function createFromPayload(payload: OnboardingPayload) {
     }
   }
 
-  // First create all agencies (LoBs/products/buckets) so we have ids for cross-office references
+  // First create all agencies (buckets) so we have ids for cross-office references
   for (const office of payload.offices) {
     const existingAgency = await prisma.agency.findFirst({
       where: { orgId, name: office.name },
     });
-    if (existingAgency) {
-      createdAgencies.push({ name: office.name, id: existingAgency.id, orgId: existingAgency.orgId });
-      for (const lob of office.lobs.filter((l) => l.active)) {
-        let lobRecord = await prisma.lineOfBusiness.findFirst({
-          where: { agencyId: existingAgency.id, name: lob.name },
-        });
-        if (!lobRecord) {
-          lobRecord = await prisma.lineOfBusiness.create({
-            data: { agencyId: existingAgency.id, name: lob.name, premiumCategory: lob.premiumCategory as PremiumCategory },
-          });
-        } else {
-          lobRecord = await prisma.lineOfBusiness.update({
-            where: { id: lobRecord.id },
-            data: { premiumCategory: lob.premiumCategory as PremiumCategory },
-          });
-        }
-
-        for (const product of lob.products) {
-          const existingProduct = await prisma.product.findFirst({
-            where: { lineOfBusinessId: lobRecord.id, name: product.name },
-          });
-          if (!existingProduct) {
-            await prisma.product.create({
-              data: {
-                lineOfBusinessId: lobRecord.id,
-                name: product.name,
-                productType: product.productType,
-              },
-            });
-          } else {
-            await prisma.product.update({
-              where: { id: existingProduct.id },
-              data: { productType: product.productType },
-            });
-          }
-        }
-      }
-
-      for (const bucket of office.premiumBuckets) {
-        const existingBucket = await prisma.premiumBucket.findFirst({
-          where: { agencyId: existingAgency.id, name: bucket.name },
-        });
-        const bucketData = {
-          agencyId: existingAgency.id,
-          name: bucket.name,
-          description: bucket.description || null,
-          includesLobs: bucket.includesLobs,
-          includesProducts: bucket.includesProducts,
-        };
-        if (!existingBucket) {
-          await prisma.premiumBucket.create({ data: bucketData });
-        } else {
-          await prisma.premiumBucket.update({
-            where: { id: existingBucket.id },
-            data: bucketData,
-          });
-        }
-      }
-      continue;
-    }
-    const agency = await prisma.agency.create({
-      data: {
-        orgId,
-        name: office.name,
-        profileName: payload.profileName || null,
-        ownerName,
-        address: payload.address || null,
-        linesOfBusiness: {
-          create: office.lobs
-            .filter((l) => l.active)
-            .map((l) => ({
-              name: l.name,
-              premiumCategory: l.premiumCategory as PremiumCategory,
-              products: {
-                create: l.products.map((p) => ({
-                  name: p.name,
-                  productType: p.productType,
-                })),
-              },
+    let agency = existingAgency;
+    if (!agency) {
+      const officeAddress = (office as { address?: string }).address;
+      agency = await prisma.agency.create({
+        data: {
+          orgId,
+          name: office.name,
+          profileName: payload.profileName || null,
+          ownerName,
+          address: officeAddress ?? payload.address ?? null,
+          premiumBuckets: {
+            create: office.premiumBuckets.map((b) => ({
+              name: b.name,
+              description: b.description || null,
+              includesLobs: b.includesLobs,
+              includesProducts: b.includesProducts,
             })),
+          },
         },
-        premiumBuckets: {
-          create: office.premiumBuckets.map((b) => ({
-            name: b.name,
-            description: b.description || null,
-            includesLobs: b.includesLobs,
-            includesProducts: b.includesProducts,
-          })),
-        },
-      },
-    });
+      });
+    }
     createdAgencies.push({ name: office.name, id: agency.id, orgId: agency.orgId });
+
+    for (const bucket of office.premiumBuckets) {
+      const existingBucket = await prisma.premiumBucket.findFirst({
+        where: { agencyId: agency.id, name: bucket.name },
+      });
+      const bucketData = {
+        agencyId: agency.id,
+        name: bucket.name,
+        description: bucket.description || null,
+        includesLobs: bucket.includesLobs,
+        includesProducts: bucket.includesProducts,
+      };
+      const bucketUpdateData = {
+        name: bucket.name,
+        description: bucket.description || null,
+        includesLobs: bucket.includesLobs,
+        includesProducts: bucket.includesProducts,
+      };
+      if (!existingBucket) {
+        await prisma.premiumBucket.create({ data: bucketData });
+      } else {
+        await prisma.premiumBucket.update({
+          where: { id: existingBucket.id },
+          data: bucketUpdateData,
+        });
+      }
+    }
+  }
+
+  type LobProductType = OnboardingPayload["offices"][number]["lobs"][number]["products"][number]["productType"];
+  const lobSources = payload.sameForAll
+    ? payload.offices[0]?.lobs ?? []
+    : payload.offices.flatMap((office) => office.lobs);
+  const lobMap = new Map<
+    string,
+    { name: string; premiumCategory: PremiumCategory; products: Map<string, LobProductType> }
+  >();
+
+  for (const lob of lobSources) {
+    if (!lob.active) continue;
+    let entry = lobMap.get(lob.name);
+    if (!entry) {
+      entry = {
+        name: lob.name,
+        premiumCategory: lob.premiumCategory as PremiumCategory,
+        products: new Map<string, LobProductType>(),
+      };
+      lobMap.set(lob.name, entry);
+    } else {
+      entry.premiumCategory = lob.premiumCategory as PremiumCategory;
+    }
+
+    for (const product of lob.products) {
+      entry.products.set(product.name, product.productType);
+    }
+  }
+
+  for (const lobEntry of lobMap.values()) {
+    const lobRecord = await prisma.lineOfBusiness.upsert({
+      where: { orgId_name: { orgId, name: lobEntry.name } },
+      update: { premiumCategory: lobEntry.premiumCategory },
+      create: { orgId, name: lobEntry.name, premiumCategory: lobEntry.premiumCategory },
+    });
+
+    for (const [productName, productType] of lobEntry.products) {
+      await prisma.product.upsert({
+        where: { lineOfBusinessId_name: { lineOfBusinessId: lobRecord.id, name: productName } },
+        update: { productType },
+        create: { orgId, lineOfBusinessId: lobRecord.id, name: productName, productType },
+      });
+    }
   }
 
   const ownerPrimaryAgencyId = createdAgencies[0]?.id ?? null;
   let ownerCreated = false;
+  let ownerPersonId: string | null = null;
 
   // Now create teams/roles/people/fields with correct agency IDs
   for (const office of payload.offices) {
@@ -196,14 +198,20 @@ async function createFromPayload(payload: OnboardingPayload) {
       };
 
       if (existingPerson) {
-        await prisma.person.update({
+        const updatedPerson = await prisma.person.update({
           where: { id: existingPerson.id },
           data: personData,
         });
+        if (isOwnerMatch) {
+          ownerPersonId = updatedPerson.id;
+        }
       } else {
-        await prisma.person.create({
+        const createdPerson = await prisma.person.create({
           data: personData,
         });
+        if (isOwnerMatch) {
+          ownerPersonId = createdPerson.id;
+        }
       }
     }
 
@@ -255,15 +263,32 @@ async function createFromPayload(payload: OnboardingPayload) {
       primaryAgencyId: ownerPrimaryAgencyId,
     };
     if (existingOwner) {
-      await prisma.person.update({
+      const updatedOwner = await prisma.person.update({
         where: { id: existingOwner.id },
         data: ownerData,
       });
+      ownerPersonId = updatedOwner.id;
     } else {
-      await prisma.person.create({
+      const createdOwner = await prisma.person.create({
         data: ownerData,
       });
+      ownerPersonId = createdOwner.id;
     }
+  }
+
+  if (!ownerPersonId) {
+    const ownerPerson = await prisma.person.findFirst({
+      where: { orgId, fullName: { equals: ownerName, mode: "insensitive" } },
+    });
+    ownerPersonId = ownerPerson?.id ?? null;
+  }
+
+  const userId = viewer?.userId ?? null;
+  if (userId && ownerPersonId) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { personId: ownerPersonId },
+    });
   }
 
   revalidatePath("/agencies");
@@ -283,9 +308,25 @@ export default function OnboardingPage({ searchParams }: { searchParams?: { succ
       name: o.name || `Office ${idx + 1}`,
     }));
 
+    const payloadOffices =
+      parsed.sameForAll && offices.length
+        ? offices.map((office, index) =>
+            index === 0
+              ? office
+              : {
+                  ...office,
+                  lobs: offices[0].lobs,
+                  premiumBuckets: offices[0].premiumBuckets,
+                  teams: offices[0].teams,
+                  people: offices[0].people,
+                  householdFields: offices[0].householdFields,
+                }
+          )
+        : offices;
+
     const payload = {
       ...parsed,
-      offices: parsed.sameForAll ? offices.map(() => offices[0]) : offices,
+      offices: payloadOffices,
     };
 
     await createFromPayload(payload);

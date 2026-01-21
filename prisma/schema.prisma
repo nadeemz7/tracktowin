@@ -6,7 +6,7 @@ datasource db {
   provider = "postgresql"
 }
 
-// Candidate migration: org-scoped products
+// Candidate migration: org-scoped products/LoBs
 // Impacted models: Product, LineOfBusiness, SoldProduct, PremiumBucket, Comp rules (applyFilters/productIds), onboarding seeds
 
 model Org {
@@ -16,9 +16,13 @@ model Org {
   updatedAt DateTime @updatedAt
 
   agencies  Agency[]
+  linesOfBusiness LineOfBusiness[]
+  products  Product[]
   teams     Team[]
   people    Person[]
   roles     OrgRole[]
+  compPlans CompPlan[]
+  soldProducts SoldProduct[]
 }
 
 model OrgRole {
@@ -76,58 +80,60 @@ model Agency {
   activityEvents            ActivityEvent[]
   activityTargets           ActivityTarget[]
   commissionPlans           CommissionPlan[]
-  compPlans                 CompPlan[]
   households                Household[]
   householdFieldDefinitions HouseholdFieldDefinition[]
-  linesOfBusiness           LineOfBusiness[]
   marketingSourceOptions    MarketingSourceOption[]
   peoplePrimary             Person[]                   @relation("PrimaryAgency")
   memberships               PersonAgencyMembership[]
   premiumBuckets            PremiumBucket[]
   productionExpectations    ProductionExpectation[]
   compMonthlyResults        CompMonthlyResult[]
+  soldProducts              SoldProduct[]
   reportPresets             ReportPreset[]
   reportSnapshots           ReportSnapshot[]
   benchOfficePlans          BenchOfficePlan[]
-  soldProducts              SoldProduct[]
   valuePolicyDefaults       ValuePolicyDefault[]
   winTheDayPlans            WinTheDayPlan[]
 
   @@index([orgId])
 }
 
-// LineOfBusiness scope: agency-scoped via agencyId (no orgId field on this model).
-// Foreign keys: agencyId -> Agency.
+// LineOfBusiness scope: org-scoped via orgId.
+// Foreign keys: orgId -> Org.
 // Usage: Product.lineOfBusinessId; referenced by SoldProduct via Product; comp filters by LOB; PremiumBucket includesLobs by name.
 model LineOfBusiness {
   id                     String                  @id @default(cuid())
-  agencyId               String
+  orgId                  String
   name                   String
   premiumCategory        PremiumCategory
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
-  agency                 Agency                  @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  org                    Org                     @relation(fields: [orgId], references: [id], onDelete: Cascade)
   products               Product[]
   productionExpectations ProductionExpectation[]
 
-  @@unique([agencyId, name])
+  @@unique([orgId, name])
+  @@index([orgId])
 }
 
-// Product scope: agency-scoped via lineOfBusinessId -> LineOfBusiness (which is agency-scoped).
-// Foreign keys: lineOfBusinessId -> LineOfBusiness (no orgId/agencyId field on Product).
+// Product scope: org-scoped via orgId and lineOfBusinessId.
+// Foreign keys: orgId -> Org, lineOfBusinessId -> LineOfBusiness.
 // Usage: SoldProduct.productId; comp rules applyFilters.productIds; PremiumBucket includesProducts by name.
 model Product {
   id               String         @id @default(cuid())
+  orgId            String
   lineOfBusinessId String
   name             String
   productType      ProductType
   isActive         Boolean        @default(true)
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
+  org              Org            @relation(fields: [orgId], references: [id], onDelete: Cascade)
   lineOfBusiness   LineOfBusiness @relation(fields: [lineOfBusinessId], references: [id], onDelete: Cascade)
   soldProducts     SoldProduct[]
 
   @@unique([lineOfBusinessId, name])
+  @@index([orgId])
 }
 
 model Household {
@@ -149,7 +155,8 @@ model Household {
 
 model SoldProduct {
   id              String       @id @default(cuid())
-  agencyId        String
+  orgId           String
+  agencyId        String?
   productId       String
   householdId     String
   soldByName      String?
@@ -165,11 +172,13 @@ model SoldProduct {
   notes           String?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
-  agency          Agency       @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  org             Org          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  agency          Agency?      @relation(fields: [agencyId], references: [id], onDelete: SetNull)
   household       Household    @relation(fields: [householdId], references: [id], onDelete: Cascade)
   product         Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
   soldByPerson    Person?      @relation(fields: [soldByPersonId], references: [id], onDelete: SetNull)
 
+  @@index([orgId, dateSold])
   @@index([agencyId, dateSold])
   @@index([productId, dateSold])
   @@index([householdId, dateSold])
@@ -260,8 +269,19 @@ model Person {
   soldProducts         SoldProduct[]
   winAssignments       WinTheDayPlanPersonAssignment?
   benchOverride        BenchPersonOverride?
+  user                 User?                           @relation("UserPerson")
 
   @@index([orgId])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  personId  String?  @unique
+  person    Person?  @relation("UserPerson", fields: [personId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model PersonAgencyMembership {
@@ -588,7 +608,7 @@ model WinTheDayPlanPersonAssignment {
 
 model CompPlan {
   id                       String               @id @default(cuid())
-  agencyId                 String?
+  orgId                    String
   name                     String
   description              String?
   status                   CompPlanStatus       @default(DRAFT)
@@ -598,9 +618,11 @@ model CompPlan {
   effectiveStartMonth      String?
   createdAt                DateTime             @default(now())
   updatedAt                DateTime             @updatedAt
-  agency                   Agency?              @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  org                      Org                  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   assignments              CompPlanAssignment[]
   versions                 CompPlanVersion[]
+
+  @@index([orgId])
 }
 
 model CompPlanVersion {

@@ -209,7 +209,7 @@ export function NewSoldProductForm({
                 {step === "household" && (
                   <div style={{ display: "grid", gap: 12 }}>
                     <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 10 }}>Add Policy Holder</div>
+                      <div style={{ fontWeight: 700, marginBottom: 10 }}>Add Customer / Policy Holder</div>
 
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                         <form method="get" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -280,7 +280,7 @@ export function NewSoldProductForm({
                       <div style={{ display: "grid", gap: 10 }}>
                         <input
                           name="firstName"
-                          placeholder="Firstname *"
+                          placeholder="Customer first name *"
                           required={!selectedHouseholdId}
                           value={householdDraft.firstName}
                           onChange={(e) => setHouseholdDraft((d) => ({ ...d, firstName: e.target.value }))}
@@ -288,7 +288,7 @@ export function NewSoldProductForm({
                         />
                         <input
                           name="lastName"
-                          placeholder="Lastname *"
+                          placeholder="Customer last name *"
                           required={!selectedHouseholdId}
                           value={householdDraft.lastName}
                           onChange={(e) => setHouseholdDraft((d) => ({ ...d, lastName: e.target.value }))}
@@ -417,20 +417,28 @@ export function NewSoldProductForm({
                         />
                       </label>
                       <label style={{ fontSize: 14, color: "#6b7280" }}>
-                        Team member *
+                        Written by (team member)
                         <select
                           name="soldByPersonId"
                           value={soldByPersonId}
                           onChange={(e) => onSellerChange(e.target.value)}
                           style={{ padding: 12, width: "100%", borderRadius: 10, border: "1px solid #d1d5db", marginTop: 4 }}
                         >
-                          <option value="">Select team member</option>
+                          <option value="">Select team member (optional)</option>
                           {people.map((p) => (
                             <option key={p.id} value={p.id}>
                               {p.fullName}
                             </option>
                           ))}
                         </select>
+                      </label>
+                      <label style={{ fontSize: 14, color: "#6b7280" }}>
+                        Written by (manual)
+                        <input
+                          name="soldByName"
+                          placeholder="Name (optional)"
+                          style={{ padding: 12, width: "100%", borderRadius: 10, border: "1px solid #d1d5db", marginTop: 4 }}
+                        />
                       </label>
                       <label style={{ fontSize: 14, color: "#6b7280" }}>
                         Source *

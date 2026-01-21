@@ -113,54 +113,82 @@ function choice(arr) {
   return arr[randInt(0, arr.length - 1)];
 }
 
-async function ensureAgency(name, profileName) {
-  const existing = await prisma.agency.findFirst({ where: { name } });
+async function ensureOrg(name) {
+  const existing = await prisma.org.findFirst({ where: { name } });
   if (existing) return existing;
-  return prisma.agency.create({ data: { name, profileName, ownerName: "Demo Owner", address: "123 Main St" } });
+  return prisma.org.create({ data: { name } });
 }
 
-async function ensureLobs(agencyId) {
+async function ensureAgency(orgId, name, profileName) {
+  const existing = await prisma.agency.findFirst({ where: { name } });
+  if (existing) return existing;
+  return prisma.agency.create({
+    data: {
+      name,
+      profileName,
+      ownerName: "Demo Owner",
+      address: "123 Main St",
+      org: { connect: { id: orgId } },
+    },
+  });
+}
+
+async function ensureLobs(orgId) {
   for (const lob of DEFAULT_LOBS) {
-    const lobRow = await prisma.lineOfBusiness.upsert({
-      where: { agencyId_name: { agencyId, name: lob.name } },
-      update: {},
-      create: { agencyId, name: lob.name, premiumCategory: lob.premiumCategory },
-    });
+    const existingLob = await prisma.lineOfBusiness.findFirst({ where: { orgId, name: lob.name } });
+    const lobRow =
+      existingLob ||
+      (await prisma.lineOfBusiness.create({
+        data: { org: { connect: { id: orgId } }, name: lob.name, premiumCategory: lob.premiumCategory },
+      }));
     for (const prod of lob.products) {
-      await prisma.product.upsert({
-        where: { lineOfBusinessId_name: { lineOfBusinessId: lobRow.id, name: prod.name } },
-        update: { productType: prod.classification },
-        create: {
-          lineOfBusinessId: lobRow.id,
-          name: prod.name,
-          productType: prod.classification,
-        },
-      });
+      const existingProduct = await prisma.product.findFirst({ where: { orgId, name: prod.name } });
+      if (existingProduct) {
+        await prisma.product.update({
+          where: { id: existingProduct.id },
+          data: { productType: prod.classification, lineOfBusiness: { connect: { id: lobRow.id } } },
+        });
+      } else {
+        await prisma.product.create({
+          data: {
+            name: prod.name,
+            productType: prod.classification,
+            org: { connect: { id: orgId } },
+            lineOfBusiness: { connect: { id: lobRow.id } },
+          },
+        });
+      }
     }
   }
 }
 
-async function createPeople(agencyId) {
+async function createPeople(orgId, agencyId) {
   const created = [];
   for (const p of PEOPLE) {
     const existing = await prisma.person.findFirst({ where: { email: p.email } });
     const row = existing
       ? await prisma.person.update({
           where: { id: existing.id },
-          data: { fullName: p.name, teamType: p.teamType, primaryAgencyId: agencyId },
+          data: { fullName: p.name, teamType: p.teamType, primaryAgency: { connect: { id: agencyId } }, org: { connect: { id: orgId } } },
         })
       : await prisma.person.create({
-          data: { fullName: p.name, email: p.email, teamType: p.teamType, primaryAgencyId: agencyId },
-        });
+        data: {
+          fullName: p.name,
+          email: p.email,
+          teamType: p.teamType,
+          primaryAgency: { connect: { id: agencyId } },
+          org: { connect: { id: orgId } },
+        },
+      });
     created.push(row);
   }
   return created;
 }
 
-async function createPlan(agencyId) {
+async function createPlan(agencyId, orgId) {
   const plan = await prisma.compPlan.create({
     data: {
-      agencyId,
+      org: { connect: { id: orgId } },
       name: "Demo Comp Plan",
       status: "ACTIVE",
       defaultStatusEligibility: [PolicyStatus.ISSUED, PolicyStatus.PAID],
@@ -199,7 +227,7 @@ async function createPlan(agencyId) {
                 applyScope: CompApplyScope.PRODUCT,
                 applyFilters: { productNames: ["Business Raw Auto"] },
                 payoutType: CompPayoutType.PERCENT_OF_PREMIUM,
-                basePayoutValue: 0.02,
+                basePayoutValue: 2,
                 tierMode: CompTierMode.NONE,
                 statusEligibilityOverride: [PolicyStatus.ISSUED, PolicyStatus.PAID],
               },
@@ -209,7 +237,7 @@ async function createPlan(agencyId) {
                 applyScope: CompApplyScope.PRODUCT,
                 applyFilters: { productNames: ["Business Added Auto"] },
                 payoutType: CompPayoutType.PERCENT_OF_PREMIUM,
-                basePayoutValue: 0.005,
+                basePayoutValue: 0.5,
                 tierMode: CompTierMode.NONE,
                 statusEligibilityOverride: [PolicyStatus.ISSUED, PolicyStatus.PAID],
               },
@@ -220,7 +248,7 @@ async function createPlan(agencyId) {
                 applyScope: CompApplyScope.PRODUCT,
                 applyFilters: { productNames: ["Homeowners"] },
                 payoutType: CompPayoutType.PERCENT_OF_PREMIUM,
-                basePayoutValue: 0.04,
+                basePayoutValue: 4,
                 tierMode: CompTierMode.NONE,
                 statusEligibilityOverride: [PolicyStatus.ISSUED, PolicyStatus.PAID],
               },
@@ -230,7 +258,7 @@ async function createPlan(agencyId) {
                 applyScope: CompApplyScope.PRODUCT,
                 applyFilters: { productNames: ["Renters", "Condo", "PAP", "PLUP", "Boat"] },
                 payoutType: CompPayoutType.PERCENT_OF_PREMIUM,
-                basePayoutValue: 0.03,
+                basePayoutValue: 3,
                 tierMode: CompTierMode.NONE,
                 statusEligibilityOverride: [PolicyStatus.ISSUED, PolicyStatus.PAID],
               },
@@ -241,7 +269,7 @@ async function createPlan(agencyId) {
                 applyScope: CompApplyScope.PRODUCT,
                 applyFilters: { productNames: ["BOP", "Apartment", "CLUP", "Workers Comp"] },
                 payoutType: CompPayoutType.PERCENT_OF_PREMIUM,
-                basePayoutValue: 0.02,
+                basePayoutValue: 2,
                 tierMode: CompTierMode.NONE,
                 statusEligibilityOverride: [PolicyStatus.ISSUED, PolicyStatus.PAID],
               },
@@ -252,10 +280,10 @@ async function createPlan(agencyId) {
                 applyScope: CompApplyScope.PRODUCT,
                 applyFilters: { productNames: ["Short Term Disability", "Long Term Disability", "Hospital Indemnity"] },
                 payoutType: CompPayoutType.PERCENT_OF_PREMIUM,
-                basePayoutValue: 0.1,
+                basePayoutValue: 10,
                 tierMode: CompTierMode.TIERS,
                 tierBasis: CompTierBasis.PREMIUM_SUM,
-                tiers: { create: [{ minValue: 400, maxValue: 800, payoutValue: 0.14, payoutUnit: "x" }, { minValue: 801, maxValue: null, payoutValue: 0.18, payoutUnit: "x" }] },
+                tiers: { create: [{ minValue: 400, maxValue: 800, payoutValue: 14 }, { minValue: 801, maxValue: null, payoutValue: 18 }] },
                 statusEligibilityOverride: [PolicyStatus.ISSUED, PolicyStatus.PAID],
               },
               // Life
@@ -265,10 +293,10 @@ async function createPlan(agencyId) {
                 applyScope: CompApplyScope.PRODUCT,
                 applyFilters: { productNames: ["Term", "Whole Life", "Universal Life"] },
                 payoutType: CompPayoutType.PERCENT_OF_PREMIUM,
-                basePayoutValue: 0.1,
+                basePayoutValue: 10,
                 tierMode: CompTierMode.TIERS,
                 tierBasis: CompTierBasis.PREMIUM_SUM,
-                tiers: { create: [{ minValue: 3000, maxValue: 6000, payoutValue: 0.14, payoutUnit: "x" }, { minValue: 6001, maxValue: null, payoutValue: 0.18, payoutUnit: "x" }] },
+                tiers: { create: [{ minValue: 3000, maxValue: 6000, payoutValue: 14 }, { minValue: 6001, maxValue: null, payoutValue: 18 }] },
                 statusEligibilityOverride: [PolicyStatus.ISSUED, PolicyStatus.PAID],
               },
               // IPS
@@ -278,7 +306,7 @@ async function createPlan(agencyId) {
                 applyScope: CompApplyScope.PRODUCT,
                 applyFilters: { productNames: ["Advisory Account", "Non Advisory Account"] },
                 payoutType: CompPayoutType.PERCENT_OF_PREMIUM,
-                basePayoutValue: 0.02,
+                basePayoutValue: 2,
                 tierMode: CompTierMode.NONE,
                 statusEligibilityOverride: [PolicyStatus.ISSUED, PolicyStatus.PAID],
               },
@@ -297,14 +325,19 @@ async function createPlan(agencyId) {
                     requiresAllConditions: true,
                     conditions: {
                       create: [
-                        { metricSource: CompMetricSource.BUCKET, operator: "GTE", value: 30000 },
-                        { metricSource: CompMetricSource.BUCKET, operator: "GTE", value: 2000 },
+                        { metricSource: CompMetricSource.TOTAL_PREMIUM, operator: "GTE", value: 30000 },
+                        {
+                          metricSource: CompMetricSource.PREMIUM_CATEGORY,
+                          operator: "GTE",
+                          value: 2000,
+                          filters: { premiumCategory: PremiumCategory.PC },
+                        },
                       ],
                     },
                     rewards: {
                       create: [
-                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 0.01 },
-                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 0.02 },
+                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 1, premiumCategory: PremiumCategory.PC },
+                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 2 },
                       ],
                     },
                   },
@@ -314,14 +347,19 @@ async function createPlan(agencyId) {
                     requiresAllConditions: true,
                     conditions: {
                       create: [
-                        { metricSource: CompMetricSource.BUCKET, operator: "GTE", value: 60000 },
-                        { metricSource: CompMetricSource.BUCKET, operator: "GTE", value: 4000 },
+                        { metricSource: CompMetricSource.TOTAL_PREMIUM, operator: "GTE", value: 60000 },
+                        {
+                          metricSource: CompMetricSource.PREMIUM_CATEGORY,
+                          operator: "GTE",
+                          value: 4000,
+                          filters: { premiumCategory: PremiumCategory.PC },
+                        },
                       ],
                     },
                     rewards: {
                       create: [
-                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 0.02 },
-                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 0.04 },
+                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 2, premiumCategory: PremiumCategory.PC },
+                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 4 },
                       ],
                     },
                   },
@@ -331,14 +369,19 @@ async function createPlan(agencyId) {
                     requiresAllConditions: true,
                     conditions: {
                       create: [
-                        { metricSource: CompMetricSource.BUCKET, operator: "GTE", value: 90000 },
-                        { metricSource: CompMetricSource.BUCKET, operator: "GTE", value: 6000 },
+                        { metricSource: CompMetricSource.TOTAL_PREMIUM, operator: "GTE", value: 90000 },
+                        {
+                          metricSource: CompMetricSource.PREMIUM_CATEGORY,
+                          operator: "GTE",
+                          value: 6000,
+                          filters: { premiumCategory: PremiumCategory.PC },
+                        },
                       ],
                     },
                     rewards: {
                       create: [
-                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 0.03 },
-                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 0.06 },
+                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 3, premiumCategory: PremiumCategory.PC },
+                        { rewardType: CompRewardType.ADD_PERCENT_OF_BUCKET, percentValue: 6 },
                       ],
                     },
                   },
@@ -355,7 +398,7 @@ async function createPlan(agencyId) {
   // fill productIds for auto rule
   const version = plan.versions[0];
   if (version) {
-    const allProducts = await prisma.product.findMany({ where: { lineOfBusiness: { agencyId } } });
+    const allProducts = await prisma.product.findMany({ where: { lineOfBusiness: { orgId } } });
     const nameToIds = allProducts.reduce((acc, p) => {
       acc[p.name] = acc[p.name] || [];
       acc[p.name].push(p.id);
@@ -411,8 +454,8 @@ async function ensureActivitiesForAgency(agencyId) {
   }
 }
 
-async function seedSoldProducts(agencyId, people) {
-  const lobs = await prisma.lineOfBusiness.findMany({ where: { agencyId }, include: { products: true } });
+async function seedSoldProducts(agencyId, orgId, people) {
+  const lobs = await prisma.lineOfBusiness.findMany({ where: { orgId }, include: { products: true } });
   const policyStatuses = [PolicyStatus.WRITTEN, PolicyStatus.ISSUED, PolicyStatus.PAID];
   // Create a default household per person
   const households = {};
@@ -439,10 +482,11 @@ async function seedSoldProducts(agencyId, people) {
         const product = choice(lob.products);
         await prisma.soldProduct.create({
           data: {
-            householdId: households[person.id].id,
-            agencyId,
-            productId: product.id,
-            soldByPersonId: person.id,
+            household: { connect: { id: households[person.id].id } },
+            agency: { connect: { id: agencyId } },
+            org: { connect: { id: orgId } },
+            product: { connect: { id: product.id } },
+            soldByPerson: { connect: { id: person.id } },
             soldByName: person.fullName,
             dateSold: new Date(2025, month, randInt(1, 28)),
             premium: randInt(300, 5000),
@@ -460,10 +504,11 @@ async function seedSoldProducts(agencyId, people) {
         if (pcProduct) {
           await prisma.soldProduct.create({
             data: {
-              householdId: households[person.id].id,
-              agencyId,
-              productId: pcProduct.id,
-              soldByPersonId: person.id,
+              household: { connect: { id: households[person.id].id } },
+              agency: { connect: { id: agencyId } },
+              org: { connect: { id: orgId } },
+              product: { connect: { id: pcProduct.id } },
+              soldByPerson: { connect: { id: person.id } },
               soldByName: person.fullName,
               dateSold: new Date(2025, month, 5),
               premium: pcPremium,
@@ -474,10 +519,11 @@ async function seedSoldProducts(agencyId, people) {
         if (fsProduct) {
           await prisma.soldProduct.create({
             data: {
-              householdId: households[person.id].id,
-              agencyId,
-              productId: fsProduct.id,
-              soldByPersonId: person.id,
+              household: { connect: { id: households[person.id].id } },
+              agency: { connect: { id: agencyId } },
+              org: { connect: { id: orgId } },
+              product: { connect: { id: fsProduct.id } },
+              soldByPerson: { connect: { id: person.id } },
               soldByName: person.fullName,
               dateSold: new Date(2025, month, 6),
               premium: fsPremium,
@@ -513,66 +559,68 @@ async function seedActivities(people) {
   }
 }
 
+async function safeDelete(delegate, name) {
+  try {
+    if (delegate?.deleteMany) await delegate.deleteMany();
+  } catch (e) {
+    console.warn("Skip delete:", name, e?.code || e?.message);
+  }
+}
+
 async function main() {
   console.log("Seeding demo data...");
   if (process.env.DEMO_RESET === "1") {
     console.log("Resetting tables...");
     // Delete in FK-safe order
-    await prisma.winTheDayPlanPersonAssignment?.deleteMany?.();
-    await prisma.winTheDayPlanTeamAssignment?.deleteMany?.();
-    await prisma.winTheDayRule?.deleteMany?.();
-    await prisma.winTheDayPlan?.deleteMany?.();
+    await safeDelete(prisma.winTheDayPlanPersonAssignment, "winTheDayPlanPersonAssignment");
+    await safeDelete(prisma.winTheDayPlanTeamAssignment, "winTheDayPlanTeamAssignment");
+    await safeDelete(prisma.winTheDayRule, "winTheDayRule");
+    await safeDelete(prisma.winTheDayPlan, "winTheDayPlan");
     await prisma.activityRecord.deleteMany();
-    await prisma.activityTeamVisibility?.deleteMany?.();
-    await prisma.activityDailyExpectation?.deleteMany?.();
-    await prisma.activityType?.deleteMany?.();
-    await prisma.winTheDayPlanPersonAssignment?.deleteMany?.();
-    await prisma.winTheDayPlanTeamAssignment?.deleteMany?.();
-    await prisma.winTheDayRule?.deleteMany?.();
-    await prisma.winTheDayPlan?.deleteMany?.();
-    await prisma.compPlanScorecardReward?.deleteMany?.();
-    await prisma.compPlanScorecardCondition?.deleteMany?.();
-    await prisma.compPlanScorecardTier?.deleteMany?.();
-    await prisma.compPlanTierRow?.deleteMany?.();
+    await safeDelete(prisma.activityTeamVisibility, "activityTeamVisibility");
+    await safeDelete(prisma.activityDailyExpectation, "activityDailyExpectation");
+    await safeDelete(prisma.activityType, "activityType");
+    await safeDelete(prisma.compPlanScorecardReward, "compPlanScorecardReward");
+    await safeDelete(prisma.compPlanScorecardCondition, "compPlanScorecardCondition");
+    await safeDelete(prisma.compPlanScorecardTier, "compPlanScorecardTier");
+    await safeDelete(prisma.compPlanTierRow, "compPlanTierRow");
     await prisma.compPlanBonusModule.deleteMany();
     await prisma.compPlanRuleBlock.deleteMany();
     await prisma.compPlanVersion.deleteMany();
     await prisma.compPlanAssignment.deleteMany();
     await prisma.compPlan.deleteMany();
-    await prisma.compMonthlyResult?.deleteMany?.();
-    await prisma.commissionPlanAssignment?.deleteMany?.();
-    await prisma.commissionPlan?.deleteMany?.();
-    await prisma.commissionComponent?.deleteMany?.();
-    await prisma.reportPreset?.deleteMany?.();
-    await prisma.productionExpectation?.deleteMany?.();
+    await safeDelete(prisma.compMonthlyResult, "compMonthlyResult");
+    await safeDelete(prisma.commissionPlanAssignment, "commissionPlanAssignment");
+    await safeDelete(prisma.commissionPlan, "commissionPlan");
+    await safeDelete(prisma.commissionComponent, "commissionComponent");
+    await safeDelete(prisma.reportPreset, "reportPreset");
+    await safeDelete(prisma.productionExpectation, "productionExpectation");
     await prisma.householdFieldValue.deleteMany();
     await prisma.householdFieldDefinition.deleteMany();
     await prisma.marketingSourceOption.deleteMany();
     await prisma.soldProduct.deleteMany();
     await prisma.household.deleteMany();
-    await prisma.premiumBucket.deleteMany();
     await prisma.valuePolicyDefault.deleteMany();
-    await prisma.product.deleteMany();
-    await prisma.lineOfBusiness.deleteMany();
-    await prisma.role?.deleteMany?.();
-    await prisma.team?.deleteMany?.();
+    await safeDelete(prisma.role, "role");
+    await safeDelete(prisma.team, "team");
     await prisma.person.deleteMany();
     await prisma.agency.deleteMany();
   }
 
-  const legacy = await ensureAgency("Demo Legacy Agency", "Demo Legacy");
-  const moa = await ensureAgency("Demo MOA Agency", "Demo MOA");
+  const demoOrg = await ensureOrg("Demo Org");
 
-  await ensureLobs(legacy.id);
-  await ensureLobs(moa.id);
+  const legacy = await ensureAgency(demoOrg.id, "Demo Legacy Agency", "Demo Legacy");
+  const moa = await ensureAgency(demoOrg.id, "Demo MOA Agency", "Demo MOA");
+
+  await ensureLobs(demoOrg.id);
   await ensureActivitiesForAgency(legacy.id);
   await ensureActivitiesForAgency(moa.id);
 
-  const legacyPeople = await createPeople(legacy.id);
-  const moaPeople = await createPeople(moa.id);
+  const legacyPeople = await createPeople(legacy.orgId, legacy.id);
+  const moaPeople = await createPeople(moa.orgId, moa.id);
 
-  const planLegacy = await createPlan(legacy.id);
-  const planMoa = await createPlan(moa.id);
+  const planLegacy = await createPlan(legacy.id, demoOrg.id);
+  const planMoa = await createPlan(moa.id, demoOrg.id);
 
   // Assign plan to agency (all persons inherit)
   const legacyAssign = await prisma.compPlanAssignment.findFirst({ where: { planId: planLegacy.id, scopeType: CompAssignmentScope.AGENCY, scopeId: legacy.id } });
@@ -588,8 +636,8 @@ async function main() {
     await prisma.compPlanAssignment.create({ data: { planId: planMoa.id, scopeType: CompAssignmentScope.AGENCY, scopeId: moa.id, active: true } });
   }
 
-  await seedSoldProducts(legacy.id, legacyPeople);
-  await seedSoldProducts(moa.id, moaPeople);
+  await seedSoldProducts(legacy.id, demoOrg.id, legacyPeople);
+  await seedSoldProducts(moa.id, demoOrg.id, moaPeople);
   await seedActivities([...legacyPeople, ...moaPeople]);
 
   console.log("Done. Demo agencies, plans, people, sold products, and activities for 2025 created.");

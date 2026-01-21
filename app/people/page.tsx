@@ -3,6 +3,7 @@ import { getOrgViewer } from "@/lib/getOrgViewer";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import AddPersonModalTrigger from "./AddPersonModalTrigger";
+import PeopleAuthGuard from "./PeopleAuthGuard";
 import PeopleRolesClient, { RolesTab, OfficePlanTab } from "./PeopleRolesClient";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
@@ -59,7 +60,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
       prisma.benchPersonOverride.findMany({ where: { person: { orgId } }, include: { person: true } }),
       orgId
         ? prisma.lineOfBusiness.findMany({
-            where: { agency: { orgId } },
+            where: { org: { id: orgId } },
             select: { id: true, name: true, premiumCategory: true },
             orderBy: { name: "asc" },
           })
@@ -453,27 +454,28 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
   };
 
   return (
-    <AppShell title="People & Roles" subtitle="Manage people, role defaults, and office goals for Benchmarks.">
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, borderBottom: "1px solid #e5e7eb" }}>
-        {tabs.map((t) => {
-          const active = activeTab === t.key;
-          return (
-            <a
-              key={t.key}
-              href={t.href}
-              style={{
-                padding: "10px 14px",
-                borderBottom: active ? "3px solid #111827" : "3px solid transparent",
-                fontWeight: active ? 700 : 600,
-                color: active ? "#111827" : "#6b7280",
-                textDecoration: "none",
-              }}
-            >
-              {t.label}
-            </a>
-          );
-        })}
-      </div>
+    <PeopleAuthGuard>
+      <AppShell title="People & Roles" subtitle="Manage people, role defaults, and office goals for Benchmarks.">
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, borderBottom: "1px solid #e5e7eb" }}>
+          {tabs.map((t) => {
+            const active = activeTab === t.key;
+            return (
+              <a
+                key={t.key}
+                href={t.href}
+                style={{
+                  padding: "10px 14px",
+                  borderBottom: active ? "3px solid #111827" : "3px solid transparent",
+                  fontWeight: active ? 700 : 600,
+                  color: active ? "#111827" : "#6b7280",
+                  textDecoration: "none",
+                }}
+              >
+                {t.label}
+              </a>
+            );
+          })}
+        </div>
 
       {activeTab === "people" ? (
         <div style={{ display: "grid", gap: 16, paddingTop: 12 }}>
@@ -952,6 +954,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
       {activeTab === "office" ? (
         <OfficePlanTab />
       ) : null}
-    </AppShell>
+      </AppShell>
+    </PeopleAuthGuard>
   );
 }

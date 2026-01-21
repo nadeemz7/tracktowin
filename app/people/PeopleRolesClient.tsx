@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PERMISSION_DEFINITIONS } from "@/lib/permissions";
 import { useOrgLobs } from "./useOrgLobs";
 
@@ -144,7 +144,9 @@ export default function PeopleRolesClient({
   const [orgRolesLoading, setOrgRolesLoading] = useState<boolean>(false);
   const [orgRolesError, setOrgRolesError] = useState<string | null>(null);
   const [orgRoleIdsInput, setOrgRoleIdsInput] = useState<string[]>([]);
+  const [orgRoleIdsBaseline, setOrgRoleIdsBaseline] = useState<string[]>([]);
   const [orgRoleSave, setOrgRoleSave] = useState<SaveState>({ saving: false, error: null, success: false });
+  const selectedIdRef = useRef<string | null>(null);
 
   const [roleIdInput, setRoleIdInput] = useState<string>("");
   const [teamIdInput, setTeamIdInput] = useState<string>("");
@@ -196,6 +198,10 @@ export default function PeopleRolesClient({
     });
     return parsed;
   }, [overrideActivityTargets]);
+  const orgRolesDirty = useMemo(() => {
+    if (orgRoleIdsInput.length !== orgRoleIdsBaseline.length) return true;
+    return orgRoleIdsInput.some((id, index) => id !== orgRoleIdsBaseline[index]);
+  }, [orgRoleIdsBaseline, orgRoleIdsInput]);
 
   useEffect(() => {
     if (!canManagePeople) return;
@@ -227,6 +233,24 @@ export default function PeopleRolesClient({
   }, [canManagePeople]);
 
   useEffect(() => {
+    if (canManagePeople) return;
+    setOrgRoleSave({ saving: false, error: null, success: false });
+    setOrgRolesError(null);
+  }, [canManagePeople]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    if (orgRolesLoading) return;
+    if (!orgRoles.length) return;
+    const validIds = new Set(orgRoles.map((role) => role.id));
+    setOrgRoleIdsInput((prev) => {
+      const next = prev.filter((id) => validIds.has(id)).sort((a, b) => a.localeCompare(b));
+      if (next.length === prev.length && next.every((id, index) => id === prev[index])) return prev;
+      return next;
+    });
+  }, [orgRoles, orgRolesLoading, selectedId]);
+
+  useEffect(() => {
     if (!orgLobs.length) return;
     setOverrideAppsByLobInputs((prev) => {
       const next = { ...prev };
@@ -242,6 +266,7 @@ export default function PeopleRolesClient({
     const person = localPeople.find((p) => p.id === initialSelectedPersonId) || null;
     if (!person) return;
     setSelectedId(person.id);
+    selectedIdRef.current = person.id;
     resetForms(person);
   }, [initialSelectedPersonId, localPeople]);
 
@@ -267,7 +292,9 @@ export default function PeopleRolesClient({
           .filter((roleId): roleId is string => Boolean(roleId))
       )
     );
+    assignedOrgRoleIds.sort((a, b) => a.localeCompare(b));
     setOrgRoleIdsInput(assignedOrgRoleIds);
+    setOrgRoleIdsBaseline(assignedOrgRoleIds);
     setOrgRoleSave({ saving: false, error: null, success: false });
   }
 
@@ -310,6 +337,7 @@ export default function PeopleRolesClient({
 
   function onSelect(personId: string) {
     setSelectedId(personId);
+    selectedIdRef.current = personId;
     const person = localPeople.find((p) => p.id === personId) || null;
     resetForms(person);
     setAssignState({ saving: false, error: null, success: false });
@@ -442,28 +470,35 @@ export default function PeopleRolesClient({
 
   async function saveOrgRoles() {
     if (!selected) return;
+    const requestPersonId = selected.id;
+    const roleIdsInput = orgRoleIdsInput;
     setOrgRoleSave({ saving: true, error: null, success: false });
     try {
       const res = await fetch("/api/people/org-roles", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: selected.id, roleIds: orgRoleIdsInput }),
+        body: JSON.stringify({ personId: requestPersonId, roleIds: roleIdsInput }),
       });
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || "Save failed");
       }
       const json = await res.json();
-      const roleIds = Array.isArray(json?.roleIds) ? json.roleIds : orgRoleIdsInput;
+      const personId = typeof json?.personId === "string" ? json.personId : requestPersonId;
+      const roleIds = Array.isArray(json?.roleIds) ? json.roleIds : roleIdsInput;
       const roleById = new Map(orgRoles.map((role) => [role.id, role]));
-      setOrgRoleIdsInput(roleIds);
+      const sortedRoleIds = [...roleIds].sort((a, b) => a.localeCompare(b));
+      if (selectedIdRef.current === personId) {
+        setOrgRoleIdsInput(sortedRoleIds);
+        setOrgRoleIdsBaseline(sortedRoleIds);
+      }
       setLocalPeople((prev) =>
         prev.map((person) =>
-          person.id === selected.id
+          person.id === personId
             ? {
                 ...person,
-                orgRoles: roleIds.map((roleId) => {
+                orgRoles: sortedRoleIds.map((roleId) => {
                   const meta = roleById.get(roleId);
                   return {
                     roleId,
@@ -650,7 +685,7 @@ export default function PeopleRolesClient({
                                 } else {
                                   next.delete(role.id);
                                 }
-                                return Array.from(next);
+                                return Array.from(next).sort((a, b) => a.localeCompare(b));
                               });
                               setOrgRoleSave({ saving: false, error: null, success: false });
                             }}
@@ -668,7 +703,7 @@ export default function PeopleRolesClient({
                     <button
                       type="button"
                       onClick={saveOrgRoles}
-                      disabled={orgRoleSave.saving || orgRolesLoading || orgRoles.length === 0}
+                      disabled={orgRoleSave.saving || orgRolesLoading || orgRoles.length === 0 || !orgRolesDirty}
                       style={{
                         padding: "10px 14px",
                         borderRadius: 8,

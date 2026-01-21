@@ -2,10 +2,12 @@ import { prisma } from "@/lib/prisma";
 import { getViewerContext } from "@/lib/getViewerContext";
 import { ALL_PERMISSIONS, PERMISSION_DEFINITIONS, ROLE_PERMISSION_DEFAULTS } from "@/lib/permissions";
 import { cookies, headers } from "next/headers";
+import jwt from "jsonwebtoken";
 
 export { ALL_PERMISSIONS, PERMISSION_DEFINITIONS, ROLE_PERMISSION_DEFAULTS };
 
 export type OrgViewer = {
+  userId: string | null;
   personId: string | null;
   orgId: string | null;
   isAdmin: boolean;
@@ -19,8 +21,37 @@ export type OrgViewer = {
 function safeCookieGet(name: string): string | null {
   try {
     const store: any = cookies();
-    if (!store || typeof store.get !== "function") return null;
-    return store.get(name)?.value ?? null;
+    if (!store) return null;
+    const fromString = (value: string) => {
+      const tokenPair = value
+        .split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(`${name}=`));
+      return tokenPair ? tokenPair.slice(`${name}=`.length) : null;
+    };
+    if (typeof store.getAll === "function") {
+      const match = store.getAll().find((cookie: any) => cookie.name === name);
+      return match?.value ?? null;
+    }
+    if (typeof store.toString === "function") {
+      return fromString(store.toString());
+    }
+    if (typeof store.get === "function") {
+      return store.get(name)?.value ?? null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function getUserIdFromToken(token: string | null): string | null {
+  if (!token) return null;
+  const secret = process.env.JWT_SECRET;
+  if (!secret) return null;
+  try {
+    const decoded = jwt.verify(token, secret) as { userId?: string };
+    return typeof decoded?.userId === "string" ? decoded.userId : null;
   } catch {
     return null;
   }
@@ -59,16 +90,23 @@ async function resolveRoleAssignments(personId: string, orgId: string | null) {
 export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
   let request = req;
   if (!request) {
-    const hStore: any = headers();
+    let hStore: any = null;
+    try {
+      hStore = headers();
+    } catch {
+      hStore = null;
+    }
     const h = hStore && typeof hStore.then === "function" ? await hStore : hStore;
-    request = new Request("http://localhost", { headers: h });
+    request = h && typeof h.get === "function" ? new Request("http://localhost", { headers: h }) : null;
   }
 
-  const base: any = await getViewerContext(request).catch(() => null);
+  const base: any = request ? await getViewerContext(request).catch(() => null) : null;
+  const jwtUserId = getUserIdFromToken(safeCookieGet("token"));
+  const userId = typeof base?.userId === "string" ? base.userId : jwtUserId;
 
   const headerImpersonate =
-    request.headers.get("x-impersonate-person-id") ||
-    request.headers.get("x-impersonate-id") ||
+    request?.headers?.get("x-impersonate-person-id") ||
+    request?.headers?.get("x-impersonate-id") ||
     null;
 
   const cookieImpersonate = safeCookieGet("impersonatePersonId");
@@ -104,6 +142,7 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
       if (!isAdmin && !isManager && !isOwner) isAdmin = true;
 
       return {
+        userId,
         personId: preferred.id,
         orgId,
         isAdmin,
@@ -128,6 +167,7 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
 
   if (!effectivePersonId) {
     return {
+      userId,
       personId: null,
       orgId: base?.orgId ?? null,
       isAdmin: Boolean(base?.isAdmin),
@@ -147,6 +187,7 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
 
     if (!person) {
       return {
+        userId,
         personId: base?.personId ?? null,
         orgId: base?.orgId ?? null,
         isAdmin: Boolean(base?.isAdmin),
@@ -167,6 +208,7 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
     const isManager = Boolean(person.isManager);
 
     return {
+      userId,
       personId: person.id,
       orgId,
       isAdmin,
@@ -179,6 +221,7 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
   } catch (err) {
     console.error("[getOrgViewer] error", err);
     return {
+      userId,
       personId: base?.personId ?? null,
       orgId: base?.orgId ?? null,
       isAdmin: Boolean(base?.isAdmin),

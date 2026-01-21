@@ -485,6 +485,19 @@ function passesStatus(statusList: PolicyStatus[], override?: PolicyStatus[]) {
   return statusList.some((s) => override.includes(s));
 }
 
+function rowMatchesBucket(bucket: { includesProducts: string[]; includesLobs: string[] }, row: typeof sampleSold[number]) {
+  const productId = row.product.id;
+  const productName = row.product.name;
+  const lobId = row.product.lineOfBusiness.id;
+  const lobName = row.product.lineOfBusiness.name;
+  return (
+    bucket.includesProducts.includes(productId) ||
+    bucket.includesProducts.includes(productName) ||
+    bucket.includesLobs.includes(lobId) ||
+    bucket.includesLobs.includes(lobName)
+  );
+}
+
 function matchesScope(rule: any, rows: typeof sampleSold, bucketById: BucketById): typeof sampleSold {
   const filters = (rule.applyFilters || {}) as any;
   switch (rule.applyScope) {
@@ -499,9 +512,7 @@ function matchesScope(rule: any, rows: typeof sampleSold, bucketById: BucketById
     case CompApplyScope.BUCKET: {
       const bucket = rule.bucketId ? bucketById[rule.bucketId] : null;
       if (!bucket) return [];
-      return rows.filter(
-        (r) => bucket.includesProducts.includes(r.product.name) || bucket.includesLobs.includes(r.product.lineOfBusiness.name)
-      );
+      return rows.filter((r) => rowMatchesBucket(bucket, r));
     }
     default:
       return rows;
@@ -660,16 +671,7 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
   const selectedPerson = orgPeople.find((p) => p.id === selectedPersonId) || null;
   const statusFilter = applyWritten ? [PolicyStatus.WRITTEN, PolicyStatus.ISSUED, PolicyStatus.PAID] : [PolicyStatus.ISSUED, PolicyStatus.PAID];
 
-  let bucketAgencyId = selectedPerson?.primaryAgencyId || null;
-  const bucketAgencyMatch =
-    bucketAgencyId && viewerOrgId
-      ? await prisma.agency.findFirst({ where: { id: bucketAgencyId, orgId: viewerOrgId }, select: { id: true } })
-      : null;
-  const premiumBuckets = bucketAgencyMatch ? await prisma.premiumBucket.findMany({ where: { agencyId: bucketAgencyId } }) : [];
-  const bucketById = premiumBuckets.reduce((acc, bucket) => {
-    acc[bucket.id] = bucket;
-    return acc;
-  }, {} as BucketById);
+  const bucketById: BucketById = {};
 
   const sold = selectedPerson && viewerOrgId
     ? await prisma.soldProduct.findMany({
@@ -714,16 +716,7 @@ export default async function PaycheckPage({ searchParams }: { searchParams?: Se
     return acc;
   }, {});
 
-  const bucketTotalsById = premiumBuckets.reduce((acc, bucket) => {
-    const total = sold.reduce((sum, r) => {
-      if (bucket.includesProducts.includes(r.product.name) || bucket.includesLobs.includes(r.product.lineOfBusiness.name)) {
-        return sum + Number(r.premium || 0);
-      }
-      return sum;
-    }, 0);
-    acc[bucket.id] = total;
-    return acc;
-  }, {} as Record<string, number>);
+  const bucketTotalsById: Record<string, number> = {};
 
   const groupedProducts = new Map<
     string,

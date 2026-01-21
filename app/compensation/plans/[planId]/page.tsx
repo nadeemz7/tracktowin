@@ -1,4 +1,5 @@
 import { AppShell } from "@/app/components/AppShell";
+import { getOrgViewer } from "@/lib/getOrgViewer";
 import { prisma } from "@/lib/prisma";
 import {
   CompApplyScope,
@@ -41,6 +42,11 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
   const selectedLobId = sp.lob || undefined;
   const openBm = typeof sp.openBm === "string" ? sp.openBm : "";
   const { planId } = await params;
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId) {
+    redirect("/compensation/plans");
+  }
   const redirectLobParam = selectedLobId ? `&lob=${selectedLobId}` : "";
   const bonusesBaseUrl = `?section=bonuses${redirectLobParam}`;
   const scorecardsReturnUrl = `/compensation/plans/${planId}?section=bonuses&bonusTab=scorecards${redirectLobParam}`;
@@ -49,18 +55,22 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
       ? "Tiered rules require at least one valid tier."
       : sp.err === "bad_tier_input"
         ? "Tier requires Min and Payout. Enter numbers and try again."
-        : sp.err === "invalid_tier_basis"
-          ? "Tier basis requires tier mode to be set to Tiered."
-          : sp.err === "invalid_tier_rows"
-            ? "Tier rows are invalid (overlap/out of order/max <= min). Fix tiers and try again."
-            : sp.err === "invalid_threshold_basis"
-              ? "Minimum threshold requires a tier basis (apps, premium, or bucket)."
-              : "";
+      : sp.err === "invalid_tier_basis"
+        ? "Tier basis requires tier mode to be set to Tiered."
+      : sp.err === "invalid_tier_rows"
+        ? "Tier rows are invalid (overlap/out of order/max <= min). Fix tiers and try again."
+      : sp.err === "invalid_threshold_basis"
+        ? "Minimum threshold requires a tier basis (apps, premium, or bucket)."
+        : sp.err === "deprecated_bucket"
+          ? "Buckets are deprecated. Use products/LoBs/premium categories instead."
+          : "";
   const gateErrMessage =
     sp.gateErr === "missing_fields"
       ? "Gate requires a name, type, threshold, behavior, and scope."
       : sp.gateErr === "missing_rule_blocks"
         ? "Select at least one rule block when scope is set to Specific rule blocks."
+      : sp.gateErr === "deprecated_bucket"
+        ? "Bucket gates are deprecated. Use apps or premium gates instead."
       : sp.gateErr === "update_failed"
         ? "We could not update this gate. Try again."
         : sp.gateErr === "create_failed"
@@ -143,8 +153,8 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
     return "";
   }
   const specialRuleErrMessageText = specialRuleErrMessage(specialRuleErr);
-  const plan = await prisma.compPlan.findUnique({
-    where: { id: planId },
+  const plan = await prisma.compPlan.findFirst({
+    where: { id: planId, orgId },
     include: {
       versions: {
         where: { isCurrent: true },
@@ -162,7 +172,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
         },
       },
       assignments: true,
-      agency: { include: { linesOfBusiness: { include: { products: true } }, premiumBuckets: true } },
     },
   });
 
@@ -326,59 +335,22 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
     return "If minimums are not met: " + penalty + ". Requires: " + conditionsText + ".";
   };
 
-  // If the plan is scoped to an agency, use that agency's LoBs/products/buckets; otherwise fall back to all products to keep the UI usable.
-  let products: { id: string; name: string; lobName: string; premiumCategory: PremiumCategory; productType: string }[] = [];
-  let lobs: { id: string; name: string; premiumCategory: PremiumCategory }[] = [];
-  let buckets = plan.agency ? plan.agency.premiumBuckets : [];
-
-  if (plan.agency) {
-    products = plan.agency.linesOfBusiness.flatMap((lob) =>
-      lob.products.map((p) => ({
-        id: p.id,
-        name: p.name,
-        lobName: lob.name,
-        premiumCategory: lob.premiumCategory,
-        productType: p.productType,
-      }))
-    );
-    lobs = plan.agency.linesOfBusiness.map((l) => ({ id: l.id, name: l.name, premiumCategory: l.premiumCategory }));
-  } else {
-    const allProducts = await prisma.product.findMany({ include: { lineOfBusiness: true } });
-    products = allProducts.map((p) => ({
+  // Org-scoped LoBs/products.
+  const orgLobs = await prisma.lineOfBusiness.findMany({ where: { orgId } });
+  const orgProducts = await prisma.product.findMany({ where: { orgId }, include: { lineOfBusiness: true } });
+  let products: { id: string; name: string; lobName: string; premiumCategory: PremiumCategory; productType: string }[] =
+    orgProducts.map((p) => ({
       id: p.id,
       name: p.name,
       lobName: p.lineOfBusiness.name,
       premiumCategory: p.lineOfBusiness.premiumCategory,
       productType: p.productType,
     }));
-    const lobMap = new Map<string, { id: string; name: string; premiumCategory: PremiumCategory }>();
-    allProducts.forEach((p) => {
-      if (!lobMap.has(p.lineOfBusinessId)) {
-        lobMap.set(p.lineOfBusinessId, {
-          id: p.lineOfBusinessId,
-          name: p.lineOfBusiness.name,
-          premiumCategory: p.lineOfBusiness.premiumCategory,
-        });
-      }
-    });
-    lobs = Array.from(lobMap.values());
-    buckets = [];
-  }
-
-  // De-duplicate LoBs by name (multi-agency data can repeat the same LoB)
-  const lobNameMap = new Map<string, { id: string; name: string; premiumCategory: PremiumCategory }>();
-  lobs.forEach((lob) => {
-    if (!lobNameMap.has(lob.name)) lobNameMap.set(lob.name, lob);
-  });
-  lobs = Array.from(lobNameMap.values());
-
-  // De-duplicate products by LoB+Name (multi-agency scenarios can repeat the same product)
-  const deduped = new Map<string, (typeof products)[number]>();
-  products.forEach((p) => {
-    const key = `${p.lobName}::${p.name}`;
-    if (!deduped.has(key)) deduped.set(key, p);
-  });
-  products = Array.from(deduped.values());
+  let lobs: { id: string; name: string; premiumCategory: PremiumCategory }[] = orgLobs.map((lob) => ({
+    id: lob.id,
+    name: lob.name,
+    premiumCategory: lob.premiumCategory,
+  }));
   const sortedProducts = [...products].sort((a, b) => {
     const lobA = a.lobName || "";
     const lobB = b.lobName || "";
@@ -413,27 +385,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
   }
   const missingRuleCount = missingProductRules.length;
   const topMissingRules = [...missingProductRules].sort((a, b) => b.missingIdsCount - a.missingIdsCount).slice(0, 3);
-  const validLobNames = new Set(lobs.map((l) => l.name));
-  const validProductNames = new Set(products.map((p) => p.name));
-  const missingBucketRefs: { bucketId: string; bucketName: string; missingCount: number }[] = [];
-  let totalMissingBucketRefs = 0;
-  for (const bucket of buckets) {
-    const includesLobs = bucket.includesLobs || [];
-    const includesProducts = bucket.includesProducts || [];
-    const excludesLobs = "excludesLobs" in bucket && Array.isArray(bucket.excludesLobs) ? bucket.excludesLobs : [];
-    const excludesProducts =
-      "excludesProducts" in bucket && Array.isArray(bucket.excludesProducts) ? bucket.excludesProducts : [];
-    const missingLobs = includesLobs.filter((lobName) => !validLobNames.has(lobName)).length;
-    const missingProducts = includesProducts.filter((productName) => !validProductNames.has(productName)).length;
-    const missingExcludeLobs = excludesLobs.filter((lobName) => !validLobNames.has(lobName)).length;
-    const missingExcludeProducts = excludesProducts.filter((productName) => !validProductNames.has(productName)).length;
-    const missingCount = missingLobs + missingProducts + missingExcludeLobs + missingExcludeProducts;
-    if (!missingCount) continue;
-    totalMissingBucketRefs += missingCount;
-    missingBucketRefs.push({ bucketId: bucket.id, bucketName: bucket.name, missingCount });
-  }
-  const missingBucketCount = missingBucketRefs.length;
-  const topMissingBuckets = [...missingBucketRefs].sort((a, b) => b.missingCount - a.missingCount).slice(0, 3);
 
   const teams = await prisma.team.findMany({ orderBy: { name: "asc" }, include: { roles: true } });
   const people = await prisma.person.findMany({
@@ -446,7 +397,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
   // derive coverage for warning
   const productConfigCoverage = new Set<string>();
   const productUsage = new Map<string, number>();
-  const bucketUsage = new Map<string, number>();
   for (const rb of version?.ruleBlocks || []) {
     const apply = (rb.applyFilters as ApplyFilters) || {};
     if (rb.applyScope === CompApplyScope.PRODUCT && apply.productIds?.length) {
@@ -477,18 +427,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
           productConfigCoverage.add(p.id);
           productUsage.set(p.id, (productUsage.get(p.id) || 0) + 1);
         });
-    } else if (rb.applyScope === CompApplyScope.BUCKET && rb.bucketId) {
-      // bucket covers products via includesProducts/includesLobs
-      const b = buckets.find((b) => b.id === rb.bucketId);
-      if (b) {
-        products
-          .filter((p) => b.includesProducts.includes(p.name) || b.includesLobs.includes(p.lobName))
-          .forEach((p) => {
-            productConfigCoverage.add(p.id);
-            productUsage.set(p.id, (productUsage.get(p.id) || 0) + 1);
-          });
-      }
-      bucketUsage.set(rb.bucketId, (bucketUsage.get(rb.bucketId) || 0) + 1);
     }
   }
   const unconfiguredCount = products.length ? products.length - productConfigCoverage.size : 0;
@@ -535,6 +473,11 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
     const redirectLob = String(formData.get("redirectLob") || "");
 
     if (!name || !applyScope || !payoutType) return;
+
+    if (applyScope === CompApplyScope.BUCKET || tierBasis === CompTierBasis.BUCKET_VALUE || bucketId) {
+      const dest = `/compensation/plans/${planId}?section=${redirectSection}${redirectLob ? `&lob=${redirectLob}` : ""}&err=deprecated_bucket`;
+      return redirect(dest);
+    }
 
     if (tierBasis && tierMode !== CompTierMode.TIERS) {
       const dest = `/compensation/plans/${planId}?section=${redirectSection}${redirectLob ? `&lob=${redirectLob}` : ""}&err=invalid_tier_basis`;
@@ -1131,6 +1074,9 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
     const bucketId = String(formData.get("bucketId") || "") || null;
     const ruleBlockIds = formData.getAll("ruleBlockIds").map(String);
     const redirectBase = `/compensation/plans/${planId}?section=${section}${selectedLobId ? `&lob=${selectedLobId}` : ""}`;
+    if (gateType === CompGateType.MIN_BUCKET || bucketId) {
+      return redirect(`${redirectBase}&gateErr=deprecated_bucket`);
+    }
     if (!name || !gateType || !behavior || !scope || Number.isNaN(thresholdValue)) {
       return redirect(`${redirectBase}&gateErr=missing_fields`);
     }
@@ -1164,6 +1110,9 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
     const redirectSection = String(formData.get("redirectSection") || section);
     const redirectLob = String(formData.get("redirectLob") || selectedLobId || "");
     const redirectBase = `/compensation/plans/${planId}?section=${redirectSection}${redirectLob ? `&lob=${redirectLob}` : ""}`;
+    if (gateType === CompGateType.MIN_BUCKET || bucketId) {
+      return redirect(`${redirectBase}&gateErr=deprecated_bucket`);
+    }
     if (!name || !gateType || !behavior || !scope || Number.isNaN(thresholdValue)) {
       return redirect(`${redirectBase}&gateErr=missing_fields`);
     }
@@ -1200,38 +1149,13 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
 
   async function updateBucketConfig(formData: FormData) {
     "use server";
-    const bucketId = String(formData.get("bucketId") || "");
-    if (!bucketId) return;
-    const includesLobs = formData.getAll("includesLobs").map(String).filter(Boolean);
-    const includesProducts = formData.getAll("includesProducts").map(String).filter(Boolean);
-    const excludesLobs = formData.getAll("excludesLobs").map(String).filter(Boolean);
-    const excludesProducts = formData.getAll("excludesProducts").map(String).filter(Boolean);
     const redirectSection = String(formData.get("redirectSection") || "buckets");
     const redirectLob = String(formData.get("redirectLob") || "");
     const redirectBucketId = String(formData.get("redirectBucketId") || "");
     const redirectBase = `/compensation/plans/${planId}?section=${redirectSection}${redirectLob ? `&lob=${redirectLob}` : ""}${
       redirectBucketId ? `&bucketId=${redirectBucketId}` : ""
     }`;
-
-    let bucketErr = "";
-    try {
-      await prisma.premiumBucket.update({
-        where: { id: bucketId },
-        data: { includesLobs, includesProducts, excludesLobs, excludesProducts } as Prisma.PremiumBucketUpdateInput,
-      });
-    } catch {
-      try {
-        await prisma.premiumBucket.update({
-          where: { id: bucketId },
-          data: { includesLobs, includesProducts },
-        });
-        if (excludesLobs.length || excludesProducts.length) bucketErr = "excludes_unavailable";
-      } catch {
-        return redirect(`${redirectBase}&bucketErr=update_failed`);
-      }
-    }
-    revalidatePath(`/compensation/plans/${planId}`);
-    return redirect(`${redirectBase}${bucketErr ? `&bucketErr=${bucketErr}` : "&bucketMsg=updated"}`);
+    return redirect(`${redirectBase}&err=deprecated_bucket`);
   }
 
   async function addScorecardTier(formData: FormData) {
@@ -2294,6 +2218,12 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
     if (metricSource === CompMetricSource.PREMIUM_CATEGORY && premiumCategory) {
       filters.premiumCategory = premiumCategory;
     }
+    if (bucketId) {
+      return redirect(scorecardsReturnUrl);
+    }
+    if (metricSource === CompMetricSource.BUCKET) {
+      return redirect(scorecardsReturnUrl);
+    }
     if (!metricSource || !operator || valueRaw === "") return;
     const value = Number(valueRaw);
     if (Number.isNaN(value)) return;
@@ -2516,6 +2446,9 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
       rewardType = CompRewardType.ADD_FLAT_DOLLARS;
     }
     if (!rewardType) return;
+    if (rewardType === CompRewardType.ADD_PERCENT_OF_BUCKET && bucketId) {
+      return redirect(scorecardsReturnUrl);
+    }
     await prisma.compPlanScorecardReward.create({
       data: { tierId, rewardType, percentValue, dollarValue, bucketId, premiumCategory },
     });
@@ -4340,6 +4273,43 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
       if (form instanceof HTMLFormElement) syncSpecialRuleSelectedCount(form);
     });
   };
+  const disableBucketAuthoring = () => {
+    const removeOptions = (select, values) => {
+      if (!(select instanceof HTMLSelectElement)) return;
+      const activeValue = select.value;
+      Array.from(select.options).forEach((option) => {
+        if (values.includes(option.value)) option.remove();
+      });
+      if (values.includes(activeValue)) {
+        const next = select.options[0];
+        if (next) select.value = next.value;
+      }
+    };
+    const disableOptions = (select, values) => {
+      if (!(select instanceof HTMLSelectElement)) return;
+      const options = Array.from(select.options);
+      options.forEach((option) => {
+        if (values.includes(option.value)) {
+          option.disabled = true;
+          option.hidden = true;
+        }
+      });
+      if (values.includes(select.value)) {
+        const next = options.find((option) => !option.disabled);
+        if (next) select.value = next.value;
+      }
+    };
+    document.querySelectorAll('select[name="applyScope"]').forEach((select) => removeOptions(select, ["BUCKET"]));
+    document.querySelectorAll('select[name="tierBasis"]').forEach((select) => disableOptions(select, ["BUCKET_VALUE"]));
+    document.querySelectorAll('select[name="gateType"]').forEach((select) => disableOptions(select, ["MIN_BUCKET"]));
+    document.querySelectorAll('select[name="metricSource"]').forEach((select) => disableOptions(select, ["BUCKET"]));
+    document.querySelectorAll('option[value="ADD_PERCENT_OF_BUCKET"]').forEach((option) => {
+      if (option instanceof HTMLOptionElement) {
+        option.disabled = true;
+        option.hidden = true;
+      }
+    });
+  };
   document.addEventListener("change", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
@@ -4360,6 +4330,7 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
     initForms(false);
     initSubtractorUI();
     initSpecialRuleForms();
+    disableBucketAuthoring();
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => initAll(), { once: true });
@@ -5460,31 +5431,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
               </div>
             </div>
           ) : null}
-          {totalMissingBucketRefs > 0 ? (
-            <div
-              style={{
-                marginTop: 8,
-                color: "#b45309",
-                background: "#fef3c7",
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid #fcd34d",
-                fontSize: 13,
-              }}
-            >
-              <div style={{ fontWeight: 700 }}>Data integrity: Some buckets reference products/LoBs that no longer exist.</div>
-              <div style={{ fontSize: 12, marginTop: 4 }}>
-                Missing bucket refs: {totalMissingBucketRefs} across {missingBucketCount} buckets
-              </div>
-              <div style={{ marginTop: 6, display: "grid", gap: 4, fontSize: 12 }}>
-                {topMissingBuckets.map((bucket) => (
-                  <div key={bucket.bucketId}>
-                    {bucket.bucketName} — {bucket.missingCount} missing
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
         </section>
 
         {errMessage ? (
@@ -6341,12 +6287,29 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                           </label>
                           <label style={{ display: "grid", gap: 4 }}>
                             <span style={{ fontWeight: 600 }}>Tier basis</span>
-                            <select name="tierBasis" defaultValue={rb.tierBasis || ""} style={{ padding: 10 }}>
-                              <option value="">(none)</option>
-                              <option value={CompTierBasis.APP_COUNT}>App count</option>
-                              <option value={CompTierBasis.PREMIUM_SUM}>Premium sum</option>
-                              <option value={CompTierBasis.BUCKET_VALUE}>Bucket value</option>
-                            </select>
+                            {rb.tierBasis === CompTierBasis.BUCKET_VALUE ? (
+                              <>
+                                <div
+                                  style={{
+                                    padding: 10,
+                                    borderRadius: 8,
+                                    border: "1px solid #e2e8f0",
+                                    background: "#f8fafc",
+                                    color: "#64748b",
+                                    fontSize: 13,
+                                  }}
+                                >
+                                  Bucket value (deprecated)
+                                </div>
+                                <input type="hidden" name="tierBasis" value={rb.tierBasis} />
+                              </>
+                            ) : (
+                              <select name="tierBasis" defaultValue={rb.tierBasis || ""} style={{ padding: 10 }}>
+                                <option value="">(none)</option>
+                                <option value={CompTierBasis.APP_COUNT}>App count</option>
+                                <option value={CompTierBasis.PREMIUM_SUM}>Premium sum</option>
+                              </select>
+                            )}
                           </label>
                           <label style={{ display: "grid", gap: 4 }}>
                             <span style={{ fontWeight: 600 }}>Base payout value</span>
@@ -6490,12 +6453,7 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
             planId={planId}
             lobs={lobs}
             products={products}
-            buckets={buckets.map((bucket) => ({
-              id: bucket.id,
-              name: bucket.name,
-              includesProducts: bucket.includesProducts,
-              includesLobs: bucket.includesLobs,
-            }))}
+            buckets={[]}
             productUsageById={Object.fromEntries(products.map((p) => [p.id, productUsage.get(p.id) || 0]))}
             selectedLobId={selectedLobId || ""}
             addRuleBlockAction={addRuleBlock}
@@ -6515,14 +6473,18 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                       </div>
                     ) : null}
                     {(() => {
-                      const bucketNameById = new Map(buckets.map((b) => [b.id, b.name]));
                       const ruleBlockNameById = new Map((version?.ruleBlocks || []).map((rb) => [rb.id, rb.name]));
                       const gates = version?.gates || [];
                       return (
                         <div style={{ display: "grid", gap: 10 }}>
                           {gates.length === 0 ? <div style={{ color: "#94a3b8", fontSize: 12 }}>No gates yet.</div> : null}
                           {gates.map((g) => {
-                            const bucketName = g.bucketId ? bucketNameById.get(g.bucketId) || "Unknown bucket" : null;
+                            const gateTypeLabel =
+                              g.gateType === CompGateType.MIN_APPS
+                                ? "Min apps"
+                                : g.gateType === CompGateType.MIN_PREMIUM
+                                  ? "Min premium"
+                                  : g.gateType;
                             const scopedRuleNames = g.ruleBlockIds.map((id) => ruleBlockNameById.get(id) || "Unknown rule");
                             return (
                               <div key={g.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
@@ -6530,9 +6492,8 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                                   <div>
                                     <div style={{ fontWeight: 700 }}>{g.name}</div>
                                     <div style={{ color: "#555", fontSize: 13 }}>
-                                      {g.gateType} • Threshold {g.thresholdValue} • {g.behavior} • Scope {g.scope}
+                                      {gateTypeLabel} • Threshold {g.thresholdValue} • {g.behavior} • Scope {g.scope}
                                     </div>
-                                    {bucketName ? <div style={{ color: "#475569", fontSize: 12, marginTop: 4 }}>Bucket: {bucketName}</div> : null}
                                     {g.scope === CompGateScope.RULE_BLOCKS ? (
                                       <div style={{ color: "#475569", fontSize: 12, marginTop: 4 }}>
                                         Rule blocks: {scopedRuleNames.length ? scopedRuleNames.join(", ") : "None selected"}
@@ -6595,7 +6556,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                                         <select name="gateType" defaultValue={g.gateType} required style={{ padding: 10 }}>
                                           <option value={CompGateType.MIN_APPS}>Min apps</option>
                                           <option value={CompGateType.MIN_PREMIUM}>Min premium</option>
-                                          <option value={CompGateType.MIN_BUCKET}>Min bucket</option>
                                         </select>
                                       </label>
                                       <label style={{ display: "grid", gap: 4 }}>
@@ -6615,17 +6575,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                                         <select name="scope" defaultValue={g.scope} required style={{ padding: 10 }}>
                                           <option value={CompGateScope.PLAN}>Entire plan</option>
                                           <option value={CompGateScope.RULE_BLOCKS}>Specific rule blocks</option>
-                                        </select>
-                                      </label>
-                                      <label style={{ display: "grid", gap: 4 }}>
-                                        <span style={{ fontWeight: 600 }}>Bucket (optional)</span>
-                                        <select name="bucketId" defaultValue={g.bucketId || ""} style={{ padding: 10 }}>
-                                          <option value="">(none)</option>
-                                          {buckets.map((b) => (
-                                            <option key={b.id} value={b.id}>
-                                              {b.name}
-                                            </option>
-                                          ))}
                                         </select>
                                       </label>
                                       <div style={{ display: "grid", gap: 6 }}>
@@ -6661,7 +6610,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                         <select name="gateType" required style={{ padding: 10 }}>
                           <option value={CompGateType.MIN_APPS}>Min apps</option>
                           <option value={CompGateType.MIN_PREMIUM}>Min premium</option>
-                          <option value={CompGateType.MIN_BUCKET}>Min bucket</option>
                         </select>
                         <input name="thresholdValue" type="number" step="0.01" placeholder="Threshold" required style={{ padding: 10 }} />
                         <label style={{ display: "grid", gap: 4 }}>
@@ -6720,14 +6668,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                           <option value={CompGateScope.PLAN}>Entire plan</option>
                           <option value={CompGateScope.RULE_BLOCKS}>Specific rule blocks</option>
                         </select>
-                        <select name="bucketId" style={{ padding: 10 }}>
-                          <option value="">Bucket (optional)</option>
-                          {buckets.map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {b.name}
-                            </option>
-                          ))}
-                        </select>
                         <div style={{ gridColumn: "1 / span 3" }}>
                           <div style={{ fontSize: 13, color: "#555" }}>Apply to rule blocks (optional)</div>
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -6751,12 +6691,12 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                   <section id="bonuses">
             <h2 style={{ marginTop: 0 }}>Bonuses / Scorecard / Subtractor</h2>
             <div style={{ marginBottom: 8, color: "#6b7280" }}>
-              Create bonuses, scorecards, or subtractors with conditions on apps/premium/activities and rewards as flat $ / % of bucket / multiplier. Drag products to scope.
+              Create bonuses, scorecards, or subtractors with conditions on apps/premium/activities and rewards as flat $ / % of premium / multiplier. Drag products to scope.
             </div>
             <form action={addBonusModule} style={{ display: "grid", gap: 12 }}>
               <BonusComposer
                 products={products.map((p) => ({ id: p.id, name: p.name, usage: productUsage.get(p.id) || 0 }))}
-                buckets={buckets.map((b) => ({ id: b.id, name: b.name }))}
+                buckets={[]}
               />
               <button
                 type="submit"
@@ -6849,7 +6789,6 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                                         onDelete={deleteBonusModule}
                                       >
                                       {(() => {
-                                        const bucketNameById = new Map(buckets.map((b) => [b.id, b.name]));
                                         return (
                                           <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "stretch" }}>
                                             {bm.scorecardTiers.map((tier) => {
@@ -6918,11 +6857,11 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                                                           ? `${resolvedPremiumCategory} premium`
                                                           : cond.metricSource === CompMetricSource.TOTAL_PREMIUM
                                                             ? "Total premium"
-                                                            : cond.metricSource === CompMetricSource.APPS_COUNT
-                                                              ? "Apps"
-                                                              : cond.metricSource === CompMetricSource.ACTIVITY
-                                                                ? "Activity"
-                                                                : String(cond.metricSource);
+                                                          : cond.metricSource === CompMetricSource.APPS_COUNT
+                                                            ? "Apps"
+                                                            : cond.metricSource === CompMetricSource.ACTIVITY
+                                                              ? "Activity"
+                                                              : String(cond.metricSource);
                                                       const label = presetLabel ?? fallbackLabel;
                                                       const showOr = condIndex < group.conditions.length - 1;
                                                       return (
@@ -7087,10 +7026,7 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                                             if (reward.rewardType === CompRewardType.ADD_FLAT_DOLLARS) {
                                               rewardText = `Pays $${reward.dollarValue ?? 0}`;
                                             } else if (reward.rewardType === CompRewardType.ADD_PERCENT_OF_BUCKET) {
-                                              if (reward.bucketId) {
-                                                const bucketName = bucketNameById.get(reward.bucketId) || "Unknown bucket";
-                                                rewardText = `Pays ${percentValue}% of ${bucketName}`;
-                                              } else if (reward.premiumCategory) {
+                                              if (reward.premiumCategory) {
                                                 rewardText = `Pays ${percentValue}% of ${reward.premiumCategory} premium`;
                                               } else {
                                                 rewardText = `Pays ${percentValue}% of total premium`;
@@ -7466,10 +7402,7 @@ export default async function CompPlanDetailPage({ params, searchParams }: Param
                                             if (reward.rewardType === CompRewardType.ADD_FLAT_DOLLARS) {
                                               rewardText = `Pays $${reward.dollarValue ?? 0}`;
                                             } else if (reward.rewardType === CompRewardType.ADD_PERCENT_OF_BUCKET) {
-                                              if (reward.bucketId) {
-                                                const bucketName = bucketNameById.get(reward.bucketId) || "Unknown bucket";
-                                                rewardText = `Pays ${percentValue}% of ${bucketName}`;
-                                              } else if (reward.premiumCategory) {
+                                              if (reward.premiumCategory) {
                                                 rewardText = `Pays ${percentValue}% of ${reward.premiumCategory} premium`;
                                               } else {
                                                 rewardText = `Pays ${percentValue}% of total premium`;
@@ -10165,7 +10098,7 @@ function ruleSummary(rb: RuleBlockExpanded) {
   } else if (rb.applyScope === "PREMIUM_CATEGORY" && apply.premiumCategories?.length) {
     scopeDetail = `premium: ${apply.premiumCategories.join(", ")}`;
   } else if (rb.applyScope === "BUCKET") {
-    scopeDetail = "bucket";
+    scopeDetail = "bucket (deprecated)";
   } else {
     scopeDetail = "scope not set";
   }
@@ -10180,7 +10113,13 @@ function ruleSummary(rb: RuleBlockExpanded) {
 
   const tierLabel =
     rb.tierMode === "TIERS" && rb.tierBasis
-      ? ` • tiered on ${rb.tierBasis === "APP_COUNT" ? "app count" : rb.tierBasis === "PREMIUM_SUM" ? "premium" : "bucket"}`
+      ? ` • tiered on ${
+          rb.tierBasis === "APP_COUNT"
+            ? "app count"
+            : rb.tierBasis === "PREMIUM_SUM"
+              ? "premium"
+              : "bucket value (deprecated)"
+        }`
       : "";
   const thresholdLabel = rb.minThreshold ? ` • min ${rb.minThreshold}` : "";
 
@@ -10381,7 +10320,6 @@ async function computePreview(planId: string, planVersionId: string, personId: s
           },
         },
       },
-      agency: { include: { linesOfBusiness: { include: { products: true } }, premiumBuckets: true } },
     },
   });
   if (!plan || !plan.versions[0]) {
@@ -10438,34 +10376,19 @@ async function computePreview(planId: string, planVersionId: string, personId: s
 
   // bucket values
   const bucketValues: Record<string, number> = {};
+  const orgProducts = plan.orgId
+    ? await prisma.product.findMany({ where: { orgId: plan.orgId }, include: { lineOfBusiness: true } })
+    : [];
   const productsById = new Map<string, ProductMeta>(
-    plan.agency?.linesOfBusiness.flatMap((lob) =>
-      lob.products.map((p) => [
-        p.id,
-        { lob: { id: lob.id, name: lob.name, premiumCategory: lob.premiumCategory }, product: { id: p.id, name: p.name, productType: p.productType } },
-      ])
-    ) || []
+    orgProducts.map((p) => [
+      p.id,
+      {
+        lob: { id: p.lineOfBusiness.id, name: p.lineOfBusiness.name, premiumCategory: p.lineOfBusiness.premiumCategory },
+        product: { id: p.id, name: p.name, productType: p.productType },
+      },
+    ])
   );
   const unmappedSoldCount = sold.filter((s) => !productsById.get(s.productId)).length;
-
-  const premiumBuckets = plan.agency?.premiumBuckets || [];
-  for (const bucket of premiumBuckets) {
-    const excludesProducts = (bucket as any).excludesProducts || [];
-    const excludesLobs = (bucket as any).excludesLobs || [];
-    const value = sold
-      .filter((s) => defaultStatuses.includes(s.status))
-      .filter((s) => {
-        const meta = productsById.get(s.productId);
-        if (!meta) return false;
-        if (excludesProducts.includes(meta.product.name)) return false;
-        if (excludesLobs.includes(meta.lob.name)) return false;
-        if (bucket.includesProducts.includes(meta.product.name)) return true;
-        if (bucket.includesLobs.includes(meta.lob.name)) return true;
-        return false;
-      })
-      .reduce((sum, s) => sum + s.premium, 0);
-    bucketValues[bucket.id] = value;
-  }
 
   const baseResults: { ruleId: string; amount: number; detail: string }[] = [];
   let baseTotal = 0;
@@ -10478,8 +10401,8 @@ async function computePreview(planId: string, planVersionId: string, personId: s
     const basisValue =
       rb.tierBasis === CompTierBasis.APP_COUNT
         ? appCount
-        : rb.tierBasis === CompTierBasis.BUCKET_VALUE && rb.bucketId
-          ? bucketValues[rb.bucketId] || 0
+        : rb.tierBasis === CompTierBasis.BUCKET_VALUE
+          ? 0
           : premiumSum;
 
     if (rb.minThreshold != null && basisValue < rb.minThreshold) {
@@ -10514,8 +10437,8 @@ async function computePreview(planId: string, planVersionId: string, personId: s
       metric = sold.length;
     } else if (gate.gateType === CompGateType.MIN_PREMIUM) {
       metric = sold.reduce((sum, s) => sum + s.premium, 0);
-    } else if (gate.gateType === CompGateType.MIN_BUCKET && gate.bucketId) {
-      metric = bucketValues[gate.bucketId] || 0;
+    } else if (gate.gateType === CompGateType.MIN_BUCKET) {
+      metric = 0;
     }
     if (metric < gate.thresholdValue) {
       if (gate.scope === CompGateScope.PLAN) {
@@ -10557,8 +10480,8 @@ async function computePreview(planId: string, planVersionId: string, personId: s
             return meta ? lobIds.includes(meta.lob.id) : false;
           });
         }
-        if (cond.metricSource === "BUCKET" && cond.bucketId) {
-          value = bucketValues[cond.bucketId] || 0;
+        if (cond.metricSource === "BUCKET") {
+          value = 0;
         } else if (cond.metricSource === "PREMIUM_CATEGORY") {
           const targetCategory = cond.premiumCategory as PremiumCategory | null;
           value = targetCategory
@@ -10632,7 +10555,7 @@ async function computePreview(planId: string, planVersionId: string, personId: s
           if (r.rewardType === CompRewardType.ADD_FLAT_DOLLARS && r.dollarValue) rewardAmount += r.dollarValue;
           if (r.rewardType === CompRewardType.ADD_PERCENT_OF_BUCKET && r.percentValue) {
             if (r.bucketId) {
-              rewardAmount += (r.percentValue / 100) * (bucketValues[r.bucketId] || 0);
+              rewardAmount += 0;
             } else if (r.premiumCategory) {
               const categoryPremium = sold
                 .filter((s) => defaultStatuses.includes(s.status))
@@ -10732,8 +10655,8 @@ function matchesScope(
   if (rb.applyScope === CompApplyScope.PREMIUM_CATEGORY && apply?.premiumCategories?.length) {
     return apply.premiumCategories.includes(meta.lob.premiumCategory);
   }
-  if (rb.applyScope === CompApplyScope.BUCKET && rb.bucketId) {
-    return (bucketValues[rb.bucketId] || 0) > 0;
+  if (rb.applyScope === CompApplyScope.BUCKET) {
+    return false;
   }
   return true;
 }

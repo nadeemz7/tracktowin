@@ -30,7 +30,6 @@ export default async function AgencyDetailPage({
         orderBy: { name: "asc" },
         include: { products: { orderBy: { name: "asc" } } },
       },
-      premiumBuckets: true,
       valuePolicyDefaults: true,
       householdFieldDefinitions: {
         orderBy: { fieldName: "asc" },
@@ -487,22 +486,9 @@ export default async function AgencyDetailPage({
           }}
         >
           <div style={{ fontWeight: 800, fontSize: 16 }}>Premium Buckets</div>
-          {agency.premiumBuckets.length === 0 ? (
-            <p style={{ color: "#555", margin: 0 }}>No premium buckets defined.</p>
-          ) : (
-            <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
-              {agency.premiumBuckets.map((b) => (
-                <li key={b.id}>
-                  <strong>{b.name}</strong>
-                  {b.description ? <> — {b.description}</> : null}
-                  <div style={{ color: "#555", fontSize: 13 }}>
-                    LoBs: {b.includesLobs.length ? b.includesLobs.join(", ") : "—"} • Products:{" "}
-                    {b.includesProducts.length ? b.includesProducts.join(", ") : "—"}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+          <p style={{ color: "#555", margin: 0 }}>
+            Premium buckets are deprecated. Use product filters/tags in plans and reports.
+          </p>
         </section>
         <section
           style={{

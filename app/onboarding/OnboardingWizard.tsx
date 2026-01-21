@@ -5,7 +5,7 @@ import { useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { OfficePayload, OnboardingPayload, makeOffice } from "./config";
 
-type WizardOffice = OfficePayload;
+type WizardOffice = OfficePayload & { address?: string };
 
 const fieldBaseStyle: CSSProperties = {
   border: "1px solid #d1d5db",
@@ -30,19 +30,18 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
   const router = useRouter();
   const [ownerName, setOwnerName] = useState("");
   const [profileName, setProfileName] = useState("");
-  const [address, setAddress] = useState("");
   const [officeCount, setOfficeCount] = useState(1);
-  const [sameForAll, setSameForAll] = useState(true);
-  const [activeOfficeIndex, setActiveOfficeIndex] = useState(0);
+  const sameForAll = true;
   const [step, setStep] = useState(0);
   const [isOpen, setIsOpen] = useState(true);
   const [showBanner, setShowBanner] = useState(false);
   const [showOwnerNameError, setShowOwnerNameError] = useState(false);
-  const steps = ["Profile", "Offices & LOBs", "Teams & Roles", "Roster", "Household Fields & Buckets"];
+  const [showProfileNameError, setShowProfileNameError] = useState(false);
+  const steps = ["Profile", "LoBs & Products", "Teams & Roles", "Roster", "Household Fields & Buckets"];
   const [offices, setOffices] = useState<WizardOffice[]>([
-    makeOffice("Legacy"),
-    makeOffice("MOA"),
-    makeOffice("TROA"),
+    { ...makeOffice("Legacy"), address: "" },
+    { ...makeOffice("MOA"), address: "" },
+    { ...makeOffice("TROA"), address: "" },
   ]);
 
   const officeTabs = useMemo(() => offices.slice(0, officeCount), [offices, officeCount]);
@@ -54,12 +53,14 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
       office.people.some((person) => !person.primaryOfficeName || !person.primaryOfficeName.trim())
     );
   const ownerNameMissing = !ownerName.trim();
+  const profileNameMissing = !profileName.trim();
   const rosterStepIndex = steps.indexOf("Roster");
   const isRosterStep = step === rosterStepIndex;
   const isProfileStep = step === 0;
   const isLastStep = step === steps.length - 1;
   const isAdvanceBlocked =
-    (isProfileStep && ownerNameMissing) || (isRosterStep && rosterPrimaryOfficeMissing);
+    (isProfileStep && (ownerNameMissing || profileNameMissing)) ||
+    (isRosterStep && rosterPrimaryOfficeMissing);
 
   const suffixes = ["Legacy", "MOA", "TROA"];
 
@@ -82,11 +83,11 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
     });
   }
 
-function addProduct(
-  idx: number,
-  lobName: string,
-  product: { name: string; productType: "PERSONAL" | "BUSINESS" }
-) {
+  function addProduct(
+    idx: number,
+    lobName: string,
+    product: { name: string; productType: "PERSONAL" | "BUSINESS" }
+  ) {
     if (!product.name.trim()) return;
     updateOffice(idx, (o) => ({
       ...o,
@@ -162,41 +163,49 @@ function addProduct(
   }
 
   async function handleSubmit() {
-    if (ownerNameMissing) {
-      setShowOwnerNameError(true);
+    if (ownerNameMissing || profileNameMissing) {
+      setShowOwnerNameError(ownerNameMissing);
+      setShowProfileNameError(profileNameMissing);
       setStep(0);
       return;
     }
     const hasSingleOffice = officeTabs.length === 1;
     const singleOfficeName = officeOptions[0] || "Office 1";
-    const payload: OnboardingPayload = {
+    const baseOffice = officeTabs[0];
+    if (!baseOffice) return;
+    const normalizedBaseOffice = {
+      ...baseOffice,
+      address: baseOffice.address ?? "",
+      people: baseOffice.people.map((p) => ({
+        ...p,
+        primaryOfficeName: hasSingleOffice ? singleOfficeName : p.primaryOfficeName,
+      })),
+      lobs: baseOffice.lobs.map((l) => ({
+        ...l,
+        products: l.products
+          .map((p) => ({ name: p.name.trim(), productType: p.productType }))
+          .filter((p) => p.name),
+      })),
+      premiumBuckets: baseOffice.premiumBuckets,
+    };
+    const payloadOffices = officeTabs.map((office, idx) => ({
+      ...normalizedBaseOffice,
+      name: office.name || `Office ${idx + 1}`,
+      address: office.address ?? "",
+    }));
+    const payload = {
       ownerName,
       profileName,
-      address,
+      address: "",
       sameForAll,
-      offices: officeTabs.map((o) => ({
-        ...o,
-        people: o.people.map((p) => ({
-          ...p,
-          primaryOfficeName: hasSingleOffice ? singleOfficeName : p.primaryOfficeName,
-        })),
-        lobs: o.lobs.map((l) => ({
-          ...l,
-          products: l.products
-            .map((p) => ({ name: p.name.trim(), productType: p.productType }))
-            .filter((p) => p.name),
-        })),
-        premiumBuckets: o.premiumBuckets,
-      })),
-    };
+      offices: payloadOffices,
+    } as OnboardingPayload;
     const formData = new FormData();
     formData.append("payload", JSON.stringify(payload));
     await onSubmit(formData);
     setIsOpen(false);
     setShowBanner(true);
-    setTimeout(() => {
-      router.push("/agencies");
-    }, 1200);
+    router.push("/agencies");
   }
 
   return (
@@ -241,254 +250,240 @@ function addProduct(
               background: "#f8f9fa",
             }}
           >
-        <div style={{ position: "absolute", right: 16, top: 16 }}>
-          <Link
-            href="/agencies"
-            style={{
-              padding: "8px 12px",
-              borderRadius: 10,
-              border: "1px solid #dfe5d6",
-              background: "#ffffff",
-              color: "#283618",
-              textDecoration: "none",
-              fontWeight: 700,
-            }}
-          >
-            Exit
-          </Link>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
-          {steps.map((s, idx) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => {
-                if (idx > 0 && ownerNameMissing) {
-                  setShowOwnerNameError(true);
-                  setStep(0);
-                  return;
-                }
-                setStep(idx);
-              }}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 8,
-                border: step === idx ? "2px solid #e31836" : "1px solid #dfe5d6",
-                background: step === idx ? "#e31836" : "#f8f9fa",
-                color: step === idx ? "#f8f9fa" : "#283618",
-                fontWeight: 700,
-              }}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-
-        {step === 0 ? (
-          <div style={{ display: "grid", gap: 12, marginBottom: 12 }}>
-            <h2 style={{ margin: 0 }}>Office Profile</h2>
-            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
-              <label>
-                Owner / Agent full name
-                <br />
-                <input
-                  value={ownerName}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setOwnerName(val);
-                    applyDefaultOfficeNames(val, officeCount);
-                    if (val.trim()) {
-                      setShowOwnerNameError(false);
-                    }
-                  }}
-                  placeholder="e.g., Nadeem Moustafa"
-                  required
-                  aria-invalid={showOwnerNameError && ownerNameMissing}
-                  style={{ ...inputStyle, padding: 10 }}
-                />
-                {showOwnerNameError && ownerNameMissing ? (
-                  <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>Owner name is required.</div>
-                ) : null}
-              </label>
-              <label>
-                Agency profile name
-                <br />
-                <input
-                  value={profileName}
-                  onChange={(e) => setProfileName(e.target.value)}
-                  placeholder="e.g., Nadeem Moustafa Agency"
-                  style={{ ...inputStyle, padding: 10 }}
-                />
-              </label>
-              <label>
-                Office address (optional)
-                <br />
-                <input
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="e.g., 123 Main St, Springfield"
-                  style={{ ...inputStyle, padding: 10 }}
-                />
-              </label>
+            <div style={{ position: "absolute", right: 16, top: 16 }}>
+              <Link
+                href="/agencies"
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #dfe5d6",
+                  background: "#ffffff",
+                  color: "#283618",
+                  textDecoration: "none",
+                  fontWeight: 700,
+                }}
+              >
+                Exit
+              </Link>
             </div>
-            <div>
-              <div style={{ marginBottom: 6, fontWeight: 700 }}>How many offices?</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {[1, 2, 3].map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => {
-                      setOfficeCount(n);
-                      setActiveOfficeIndex(0);
-                      applyDefaultOfficeNames(ownerName, n);
-                    }}
-                    style={{
-                      padding: "8px 12px",
-                      borderRadius: 8,
-                      border: officeCount === n ? "2px solid #1f6feb" : "1px solid #d0d5dd",
-                      background: officeCount === n ? "#eef3ff" : "#f8f9fb",
-                    }}
-                  >
-                    {n} Office{n > 1 ? "s" : ""}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={{ display: "grid", gap: 6, color: "#555" }}>
-              {officeTabs.map((o, idx) => (
-                <div key={idx} style={{ padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 10 }}>
-                  <div style={{ fontWeight: 700 }}>Office {idx + 1}</div>
-                  <div>{o.name || `${ownerName || "Office"} ${suffixes[idx] || idx + 1}`}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "inline-flex", gap: 8, alignItems: "center", marginTop: 4 }}>
-              <input type="checkbox" checked={sameForAll} onChange={(e) => setSameForAll(e.target.checked)} />
-              <span>Apply same products/teams/fields to all offices</span>
-            </div>
-          </div>
-        ) : null}
-
-        {step >= 1 ? (
-          <>
-            <h2 style={{ marginTop: 0 }}>Offices</h2>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {[1, 2, 3].map((n) => (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+              {steps.map((s, idx) => (
                 <button
-                  key={n}
+                  key={s}
                   type="button"
                   onClick={() => {
-                    setOfficeCount(n);
-                    setActiveOfficeIndex(0);
-                    applyDefaultOfficeNames(ownerName, n);
+                    if (idx > 0 && (ownerNameMissing || profileNameMissing)) {
+                      setShowOwnerNameError(ownerNameMissing);
+                      setShowProfileNameError(profileNameMissing);
+                      setStep(0);
+                      return;
+                    }
+                    setStep(idx);
                   }}
                   style={{
-                    padding: "8px 12px",
+                    padding: "6px 10px",
                     borderRadius: 8,
-                    border: officeCount === n ? "2px solid #1f6feb" : "1px solid #d0d5dd",
-                    background: officeCount === n ? "#eef3ff" : "#f8f9fb",
+                    border: step === idx ? "2px solid #e31836" : "1px solid #dfe5d6",
+                    background: step === idx ? "#e31836" : "#f8f9fa",
+                    color: step === idx ? "#f8f9fa" : "#283618",
+                    fontWeight: 700,
                   }}
                 >
-                  {n} Office{n > 1 ? "s" : ""}
+                  {s}
                 </button>
               ))}
             </div>
 
-          </>
-        ) : null}
+            {step === 0 ? (
+              <div style={{ display: "grid", gap: 12, marginBottom: 12 }}>
+                <h2 style={{ margin: 0 }}>Office Profile</h2>
+                <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+                  <label>
+                    Owner / Agent full name
+                    <br />
+                    <input
+                      value={ownerName}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setOwnerName(val);
+                        applyDefaultOfficeNames(val, officeCount);
+                        if (val.trim()) {
+                          setShowOwnerNameError(false);
+                        }
+                      }}
+                      placeholder="e.g., Nadeem Moustafa"
+                      required
+                      aria-invalid={showOwnerNameError && ownerNameMissing}
+                      style={{ ...inputStyle, padding: 10 }}
+                    />
+                    {showOwnerNameError && ownerNameMissing ? (
+                      <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>Owner name is required.</div>
+                    ) : null}
+                  </label>
+                  <label>
+                    Agency profile name
+                    <br />
+                    <input
+                      value={profileName}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setProfileName(val);
+                        if (val.trim()) {
+                          setShowProfileNameError(false);
+                        }
+                      }}
+                      placeholder="e.g., Nadeem Moustafa Agency"
+                      required
+                      aria-invalid={showProfileNameError && profileNameMissing}
+                      style={{ ...inputStyle, padding: 10 }}
+                    />
+                    {showProfileNameError && profileNameMissing ? (
+                      <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>
+                        Profile name is required.
+                      </div>
+                    ) : null}
+                  </label>
+                </div>
+                <div>
+                  <div style={{ marginBottom: 6, fontWeight: 700 }}>How many offices?</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {[1, 2, 3].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => {
+                          setOfficeCount(n);
+                          applyDefaultOfficeNames(ownerName, n);
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: 8,
+                          border: officeCount === n ? "2px solid #1f6feb" : "1px solid #d0d5dd",
+                          background: officeCount === n ? "#eef3ff" : "#f8f9fb",
+                        }}
+                      >
+                        {n} Office{n > 1 ? "s" : ""}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {officeTabs.map((o, idx) => (
+                    <div
+                      key={idx}
+                      style={{ padding: "12px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#ffffff" }}
+                    >
+                      <div style={{ fontWeight: 700, marginBottom: 8 }}>Office {idx + 1}</div>
+                      <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                        <label>
+                          Office name
+                          <br />
+                          <input
+                            value={o.name}
+                            onChange={(e) =>
+                              updateOffice(idx, (office) => ({
+                                ...office,
+                                name: e.target.value,
+                              }))
+                            }
+                            placeholder={suffixes[idx] || `Office ${idx + 1}`}
+                            style={inputStyle}
+                          />
+                        </label>
+                        <label>
+                          Office address
+                          <br />
+                          <input
+                            value={o.address ?? ""}
+                            onChange={(e) =>
+                              updateOffice(idx, (office) => ({
+                                ...office,
+                                address: e.target.value,
+                              }))
+                            }
+                            placeholder="e.g., 123 Main St, Springfield"
+                            style={inputStyle}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
-        {step >= 1 ? (
-          <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
-            {officeTabs.map((o, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setActiveOfficeIndex(idx)}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: 8,
-                  border: activeOfficeIndex === idx ? "2px solid #1f6feb" : "1px solid #d0d5dd",
-                  background: activeOfficeIndex === idx ? "#eef3ff" : "#f8f9fb",
-                }}
-              >
-                {o.name || `Office ${idx + 1}`}
-              </button>
-            ))}
+            {step >= 1 && officeTabs[0] ? (
+              <OfficeEditor
+                office={officeTabs[0]}
+                officeIndex={0}
+                updateOffice={updateOffice}
+                addProduct={addProduct}
+                removeProduct={removeProduct}
+                addRole={addRole}
+                removeRole={removeRole}
+                addPerson={addPerson}
+                updateField={updateField}
+                addField={addField}
+                step={step - 1} // shift because profile is step 0
+                officeOptions={officeOptions}
+              />
+            ) : null}
+
+            {isRosterStep && rosterPrimaryOfficeMissing ? (
+              <div style={{ marginTop: 12, color: "#b45309", fontSize: 13 }}>
+                Primary Office is required for each team member when multiple offices are set.
+              </div>
+            ) : null}
+
+            {isLastStep ? (
+              <div style={{ marginTop: 12, color: "#475569", fontSize: 13 }}>
+                Office on a Sold Product can differ from a person's Primary Office. Primary Office is only a default.
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "space-between" }}>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setStep((s) => Math.max(0, s - 1))}
+                  style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #dfe5d6", background: "#f8f9fa" }}
+                >
+                  Previous
+                </button>
+                {!isLastStep ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isProfileStep && (ownerNameMissing || profileNameMissing)) {
+                        setShowOwnerNameError(ownerNameMissing);
+                        setShowProfileNameError(profileNameMissing);
+                        return;
+                      }
+                      if (isRosterStep && rosterPrimaryOfficeMissing) return;
+                      setStep((s) => Math.min(steps.length - 1, s + 1));
+                    }}
+                    disabled={isAdvanceBlocked}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: 10,
+                      border: "1px solid #3f5f46",
+                      background: "#3f5f46",
+                      color: "#f8f9fa",
+                      opacity: isAdvanceBlocked ? 0.5 : 1,
+                      cursor: isAdvanceBlocked ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    Next
+                  </button>
+                ) : null}
+              </div>
+              {isLastStep ? (
+                <button type="button" onClick={handleSubmit} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #e31836", background: "#e31836", color: "#f8f9fa", fontWeight: 700 }}>
+                  Save &amp; Finish
+                </button>
+              ) : null}
+            </div>
           </div>
-        ) : null}
-
-        {step >= 1 && officeTabs[activeOfficeIndex] ? (
-          <OfficeEditor
-            office={officeTabs[activeOfficeIndex]}
-            officeIndex={activeOfficeIndex}
-            updateOffice={updateOffice}
-            addProduct={addProduct}
-            removeProduct={removeProduct}
-            addRole={addRole}
-            removeRole={removeRole}
-            addPerson={addPerson}
-            updateField={updateField}
-            addField={addField}
-            step={step - 1} // shift because profile is step 0
-            officeOptions={officeOptions}
-          />
-        ) : null}
-
-        {isRosterStep && rosterPrimaryOfficeMissing ? (
-          <div style={{ marginTop: 12, color: "#b45309", fontSize: 13 }}>
-            Primary Office is required for each team member when multiple offices are set.
-          </div>
-        ) : null}
-
-        {isLastStep ? (
-          <div style={{ marginTop: 12, color: "#475569", fontSize: 13 }}>
-            Office on a Sold Product can differ from a person's Primary Office. Primary Office is only a default.
-          </div>
-        ) : null}
-
-        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "space-between" }}>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            type="button"
-            onClick={() => setStep((s) => Math.max(0, s - 1))}
-            style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #dfe5d6", background: "#f8f9fa" }}
-          >
-            Previous
-          </button>
-          {!isLastStep ? (
-            <button
-              type="button"
-              onClick={() => {
-                if (isProfileStep && ownerNameMissing) {
-                  setShowOwnerNameError(true);
-                  return;
-                }
-                if (isRosterStep && rosterPrimaryOfficeMissing) return;
-                setStep((s) => Math.min(steps.length - 1, s + 1));
-              }}
-              disabled={isAdvanceBlocked}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: "1px solid #3f5f46",
-                background: "#3f5f46",
-                color: "#f8f9fa",
-                opacity: isAdvanceBlocked ? 0.5 : 1,
-                cursor: isAdvanceBlocked ? "not-allowed" : "pointer",
-              }}
-            >
-              Next
-            </button>
-          ) : null}
-        </div>
-        {isLastStep ? (
-          <button type="button" onClick={handleSubmit} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #e31836", background: "#e31836", color: "#f8f9fa", fontWeight: 700 }}>
-            Save &amp; Finish
-          </button>
-        ) : null}
-      </div>
-      </div>
         </div>
       ) : null}
     </>
@@ -556,26 +551,9 @@ function OfficeEditor({
       {step === 0 ? (
         <div style={{ display: "grid", gap: 12 }}>
           <div style={{ border: "1px solid #e5e5e5", borderRadius: 10, padding: 12 }}>
-            <label>
-              Office name
-              <br />
-              <input
-                value={office.name}
-                onChange={(e) =>
-                  updateOffice(officeIndex, (o) => ({
-                    ...o,
-                    name: e.target.value,
-                  }))
-                }
-                style={inputStyle}
-              />
-            </label>
-          </div>
-
-          <div style={{ border: "1px solid #e5e5e5", borderRadius: 10, padding: 12 }}>
             <div style={{ fontWeight: 700 }}>Lines of Business & Products</div>
             <div style={{ color: "#555", fontSize: 13, marginBottom: 8 }}>
-              Activate LoBs and adjust products. Defaults applied for each office.
+              Activate LoBs and adjust products once for your organization.
             </div>
             <div style={{ display: "grid", gap: 12 }}>
               {office.lobs.map((lob, i) => (
@@ -977,6 +955,7 @@ function PersonEditor({
     isAdmin: false,
     isManager: false,
   });
+  const [personError, setPersonError] = useState("");
 
   return (
     <div style={{ display: "grid", gap: 10 }}>
@@ -986,7 +965,10 @@ function PersonEditor({
           <br />
           <input
             value={form.fullName}
-            onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, fullName: e.target.value }));
+              setPersonError("");
+            }}
             style={inputStyle}
           />
         </label>
@@ -995,7 +977,10 @@ function PersonEditor({
           <br />
           <input
             value={form.email}
-            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, email: e.target.value }));
+              setPersonError("");
+            }}
             style={inputStyle}
           />
         </label>
@@ -1009,6 +994,7 @@ function PersonEditor({
               const nextRole =
                 office.teams.find((t) => t.name === nextTeam)?.roles[0] || "";
               setForm((f) => ({ ...f, team: nextTeam, role: nextRole }));
+              setPersonError("");
             }}
             style={selectStyle}
           >
@@ -1024,7 +1010,10 @@ function PersonEditor({
           <br />
           <select
             value={form.role}
-            onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, role: e.target.value }));
+              setPersonError("");
+            }}
             style={selectStyle}
           >
             {office.teams
@@ -1041,7 +1030,10 @@ function PersonEditor({
           <br />
           <select
             value={form.primaryOfficeName}
-            onChange={(e) => setForm((f) => ({ ...f, primaryOfficeName: e.target.value }))}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, primaryOfficeName: e.target.value }));
+              setPersonError("");
+            }}
             style={selectStyle}
           >
             {officeOptions.map((o) => (
@@ -1076,7 +1068,22 @@ function PersonEditor({
         <button
           type="button"
           onClick={() => {
-            if (!form.fullName.trim()) return;
+            const trimmedName = form.fullName.trim();
+            const trimmedRole = form.role.trim();
+            const teamRoles = office.teams.find((t) => t.name === form.team)?.roles || [];
+            const roleValid = Boolean(trimmedRole && teamRoles.includes(trimmedRole));
+            const primaryOfficeValid = Boolean(form.primaryOfficeName.trim());
+            if (!trimmedName || !primaryOfficeValid || !roleValid) {
+              setPersonError(
+                !trimmedName
+                  ? "Full name is required."
+                  : !roleValid
+                    ? "Select a valid role for the team."
+                    : "Primary office is required."
+              );
+              return;
+            }
+            setPersonError("");
             addPerson(officeIndex, form);
             setForm({
               fullName: "",
@@ -1093,6 +1100,7 @@ function PersonEditor({
           Add team member
         </button>
       </div>
+      {personError ? <div style={{ color: "#b91c1c", fontSize: 12 }}>{personError}</div> : null}
 
       <div style={{ display: "grid", gap: 6 }}>
         {office.people.map((p, idx) => (
@@ -1106,7 +1114,11 @@ function PersonEditor({
                 {p.email || "No email"} • {p.team} / {p.role} {p.isAdmin ? "• Admin" : ""} {p.isManager ? "• Manager" : ""}
               </div>
             </div>
-            <button type="button" style={{ padding: "6px 10px" }}>
+            <button
+              type="button"
+              disabled
+              style={{ padding: "6px 10px", opacity: 0.5, cursor: "not-allowed" }}
+            >
               Send invite
             </button>
           </div>

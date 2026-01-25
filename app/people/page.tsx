@@ -3,12 +3,13 @@ import { getOrgViewer } from "@/lib/getOrgViewer";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import AddPersonModalTrigger from "./AddPersonModalTrigger";
+import OrgChartClient from "./OrgChartClient";
 import PeopleAuthGuard from "./PeopleAuthGuard";
 import PeopleRolesClient, { RolesTab, OfficePlanTab } from "./PeopleRolesClient";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
-const TAB_KEYS = ["people", "roles", "office"] as const;
+const TAB_KEYS = ["people", "roles", "office", "orgchart"] as const;
 
 export default async function PeoplePage({ searchParams }: { searchParams?: SearchParams }) {
   const sp = (await searchParams) || {};
@@ -35,10 +36,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
     );
   }
 
-  const permissions = viewer?.permissions ?? [];
-  const canManagePeople = Boolean(
-    viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
-  );
+  const canManagePeople = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
 
   const [people, teams, agencies, roleExpectations, personOverrides, linesOfBusiness, activityTypes] =
     await Promise.all([
@@ -79,10 +77,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
 
     const viewer: any = await getOrgViewer();
     const orgId = viewer?.orgId;
-    const permissions = viewer?.permissions ?? [];
-    const canManagePeople = Boolean(
-      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
-    );
+    const canManagePeople = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
     if (!orgId || !canManagePeople) return;
 
     const fullName = String(formData.get("fullName") || "").trim();
@@ -129,10 +124,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
 
     const viewer: any = await getOrgViewer();
     const orgId = viewer?.orgId;
-    const permissions = viewer?.permissions ?? [];
-    const canManagePeople = Boolean(
-      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
-    );
+    const canManagePeople = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
     if (!orgId || !canManagePeople) return;
 
     const personId = String(formData.get("personId") || "");
@@ -155,10 +147,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
 
     const viewer: any = await getOrgViewer();
     const orgId = viewer?.orgId;
-    const permissions = viewer?.permissions ?? [];
-    const canManagePeople = Boolean(
-      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
-    );
+    const canManagePeople = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
     if (!orgId || !canManagePeople) return;
 
     const personId = String(formData.get("personId") || "");
@@ -182,10 +171,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
 
     const viewer: any = await getOrgViewer();
     const orgId = viewer?.orgId;
-    const permissions = viewer?.permissions ?? [];
-    const canManagePeople = Boolean(
-      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
-    );
+    const canManagePeople = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
     if (!orgId || !canManagePeople) return;
 
     const teamName = String(formData.get("teamName") || "").trim();
@@ -207,10 +193,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
 
     const viewer: any = await getOrgViewer();
     const orgId = viewer?.orgId;
-    const permissions = viewer?.permissions ?? [];
-    const canManagePeople = Boolean(
-      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
-    );
+    const canManagePeople = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
     if (!orgId || !canManagePeople) return;
 
     const teamId = String(formData.get("teamId") || "");
@@ -232,6 +215,7 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
     { key: "people", label: "People", href: "/people?tab=people" },
     { key: "roles", label: "Roles", href: "/people?tab=roles" },
     { key: "office", label: "Office Plan", href: "/people?tab=office" },
+    { key: "orgchart", label: "Org Chart", href: "/people?tab=orgchart" },
   ];
 
   const roles = teams.flatMap((t) => t.roles.map((r) => ({ id: r.id, name: r.name, team: t })));
@@ -953,6 +937,15 @@ export default async function PeoplePage({ searchParams }: { searchParams?: Sear
 
       {activeTab === "office" ? (
         <OfficePlanTab />
+      ) : null}
+
+      {activeTab === "orgchart" ? (
+        <OrgChartClient
+          canManagePeople={canManagePeople}
+          ownerName={viewer?.fullName || ""}
+          people={people}
+          teams={teams}
+        />
       ) : null}
       </AppShell>
     </PeopleAuthGuard>

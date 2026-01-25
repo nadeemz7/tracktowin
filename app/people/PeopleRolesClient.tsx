@@ -12,6 +12,8 @@ type Person = {
   id: string;
   fullName: string;
   email?: string | null;
+  dateOfBirth?: string | Date | null;
+  startDate?: string | Date | null;
   teamId?: string | null;
   roleId?: string | null;
   primaryAgencyId?: string | null;
@@ -107,6 +109,13 @@ function fmtMoney(n: number | null | undefined) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
+function toDateInputValue(value: string | Date | null | undefined) {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.valueOf())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
 function badgeForPerson(p: Person, overrides: Map<string, PersonOverride>, expectations: Map<string, RoleExpectation>) {
   const override = overrides.get(p.id);
   const hasOverride =
@@ -137,8 +146,12 @@ export default function PeopleRolesClient({
 
   const selected = selectedId ? localPeople.find((p) => p.id === selectedId) || null : null;
   const roleDefaults = selected?.roleId ? expectationsMap.get(selected.roleId) : null;
+  const canEditDates = Boolean(
+    selected && (canManagePeople || (initialSelectedPersonId && selected.id === initialSelectedPersonId))
+  );
 
   const [assignState, setAssignState] = useState<SaveState>({ saving: false, error: null, success: false });
+  const [dateSaveState, setDateSaveState] = useState<SaveState>({ saving: false, error: null, success: false });
   const [overrideState, setOverrideState] = useState<SaveState>({ saving: false, error: null, success: false });
   const [orgRoles, setOrgRoles] = useState<OrgRoleApi[]>([]);
   const [orgRolesLoading, setOrgRolesLoading] = useState<boolean>(false);
@@ -154,6 +167,8 @@ export default function PeopleRolesClient({
   const [isAdminInput, setIsAdminInput] = useState<boolean>(false);
   const [isManagerInput, setIsManagerInput] = useState<boolean>(false);
   const [activeInput, setActiveInput] = useState<boolean>(true);
+  const [dobInput, setDobInput] = useState<string>("");
+  const [startDateInput, setStartDateInput] = useState<string>("");
 
   const { lobs: orgLobs, loading: orgLobsLoading, error: orgLobsError } = useOrgLobs();
   const { activityTypes: orgActivityTypes, loading: orgActivityLoading, error: orgActivityError } =
@@ -284,6 +299,8 @@ export default function PeopleRolesClient({
     setIsAdminInput(Boolean(person.isAdmin));
     setIsManagerInput(Boolean(person.isManager));
     setActiveInput(person.active !== false);
+    setDobInput(toDateInputValue(person.dateOfBirth ?? null));
+    setStartDateInput(toDateInputValue(person.startDate ?? null));
     if (person?.id) hydrateOverrideInputs(person.id);
     const assignedOrgRoleIds = Array.from(
       new Set(
@@ -296,6 +313,7 @@ export default function PeopleRolesClient({
     setOrgRoleIdsInput(assignedOrgRoleIds);
     setOrgRoleIdsBaseline(assignedOrgRoleIds);
     setOrgRoleSave({ saving: false, error: null, success: false });
+    setDateSaveState({ saving: false, error: null, success: false });
   }
 
   function hydrateOverrideInputs(personId: string) {
@@ -370,6 +388,82 @@ export default function PeopleRolesClient({
       setAssignState({ saving: false, error: null, success: true });
     } catch (err: any) {
       setAssignState({ saving: false, error: err?.message || "Save failed", success: false });
+    }
+  }
+
+  async function toggleActive(nextActive: boolean) {
+    if (!selected || !canManagePeople) return;
+    setAssignState({ saving: true, error: null, success: false });
+    try {
+      const res = await fetch("/api/people/assignment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          personId: selected.id,
+          roleId: roleIdInput || null,
+          teamId: teamIdInput || null,
+          primaryAgencyId: primaryAgencyInput || null,
+          isAdmin: isAdminInput,
+          isManager: isManagerInput,
+          active: nextActive,
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Save failed");
+      }
+      const updated = await res.json();
+      setLocalPeople((prev) => prev.map((p) => (p.id === selected.id ? { ...p, ...updated.person } : p)));
+      setActiveInput(nextActive);
+      setAssignState({ saving: false, error: null, success: true });
+    } catch (err: any) {
+      setAssignState({ saving: false, error: err?.message || "Save failed", success: false });
+    }
+  }
+
+  async function saveDates() {
+    if (!selected || !canEditDates) return;
+    setDateSaveState({ saving: true, error: null, success: false });
+    try {
+      const payload: { personId?: string; dateOfBirth?: string | null; startDate?: string | null } = {
+        dateOfBirth: dobInput.trim() === "" ? null : dobInput.trim(),
+        startDate: startDateInput.trim() === "" ? null : startDateInput.trim(),
+      };
+      if (canManagePeople) payload.personId = selected.id;
+      const res = await fetch("/api/people/profile-dates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let message = "Save failed";
+        try {
+          const json = JSON.parse(text);
+          message = json?.error || json?.message || message;
+        } catch {
+          message = text || message;
+        }
+        throw new Error(message);
+      }
+      const json = await res.json();
+      const updated = json?.person;
+      setLocalPeople((prev) =>
+        prev.map((p) =>
+          p.id === selected.id
+            ? {
+                ...p,
+                dateOfBirth: updated?.dateOfBirth ?? payload.dateOfBirth ?? null,
+                startDate: updated?.startDate ?? payload.startDate ?? null,
+              }
+            : p
+        )
+      );
+      setDobInput(toDateInputValue(updated?.dateOfBirth ?? payload.dateOfBirth));
+      setStartDateInput(toDateInputValue(updated?.startDate ?? payload.startDate));
+      setDateSaveState({ saving: false, error: null, success: true });
+    } catch (err: any) {
+      setDateSaveState({ saving: false, error: err?.message || "Save failed", success: false });
     }
   }
 
@@ -596,16 +690,35 @@ export default function PeopleRolesClient({
                   {selected.role?.name || "No role"} • {selected.primaryAgency?.name || "No office"}
                 </div>
               </div>
-              <div
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 8,
-                  background: selected.active === false ? "#fef2f2" : "#ecfdf3",
-                  color: selected.active === false ? "#b91c1c" : "#065f46",
-                  fontWeight: 700,
-                }}
-              >
-                {selected.active === false ? "Inactive" : "Active"}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    background: selected.active === false ? "#fef2f2" : "#ecfdf3",
+                    color: selected.active === false ? "#b91c1c" : "#065f46",
+                    fontWeight: 700,
+                  }}
+                >
+                  {selected.active === false ? "Inactive" : "Active"}
+                </div>
+                {canManagePeople ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleActive(selected.active === false)}
+                    disabled={assignState.saving}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 8,
+                      border: "1px solid #111827",
+                      background: "#fff",
+                      color: "#111827",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {selected.active === false ? "Reactivate" : "Deactivate"}
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -740,6 +853,50 @@ export default function PeopleRolesClient({
                 </button>
                 {assignState.error ? <span style={{ color: "#b91c1c", fontSize: 13 }}>{assignState.error}</span> : null}
                 {assignState.success ? <span style={{ color: "#065f46", fontSize: 13 }}>Saved</span> : null}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 18, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Personal</div>
+              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span style={{ fontWeight: 600 }}>Date of birth</span>
+                  <input
+                    type="date"
+                    value={dobInput}
+                    onChange={(e) => {
+                      setDobInput(e.target.value);
+                      setDateSaveState({ saving: false, error: null, success: false });
+                    }}
+                    disabled={!canEditDates}
+                    style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                  />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span style={{ fontWeight: 600 }}>Start date</span>
+                  <input
+                    type="date"
+                    value={startDateInput}
+                    onChange={(e) => {
+                      setStartDateInput(e.target.value);
+                      setDateSaveState({ saving: false, error: null, success: false });
+                    }}
+                    disabled={!canEditDates}
+                    style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                  />
+                </label>
+              </div>
+              <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={saveDates}
+                  disabled={!canEditDates || dateSaveState.saving}
+                  style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #111827", background: "#111827", color: "#fff", fontWeight: 700 }}
+                >
+                  {dateSaveState.saving ? "Saving…" : "Save Dates"}
+                </button>
+                {dateSaveState.error ? <span style={{ color: "#b91c1c", fontSize: 13 }}>{dateSaveState.error}</span> : null}
+                {dateSaveState.success ? <span style={{ color: "#065f46", fontSize: 13 }}>Saved</span> : null}
               </div>
             </div>
 

@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "TeamType" ADD VALUE 'MANAGEMENT';

@@ -5,12 +5,13 @@ import { getOrgViewer } from "@/lib/getOrgViewer";
 export async function POST(req: Request) {
   try {
     const viewer = await getOrgViewer(req);
-    if (!viewer?.orgId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    const permissions = viewer?.permissions ?? [];
-    const canManagePeople = Boolean(
-      viewer?.isTtwAdmin || permissions.includes("MANAGE_PEOPLE") || permissions.includes("ACCESS_ADMIN_TOOLS")
-    );
-    if (!canManagePeople) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!viewer?.orgId || !viewer?.personId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const canManagePeople = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
+    if (!canManagePeople) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const body = (await req.json().catch(() => ({}))) as any;
     const personId = typeof body.personId === "string" ? body.personId.trim() : "";
@@ -20,7 +21,7 @@ export async function POST(req: Request) {
       where: { id: personId, orgId: viewer.orgId },
     });
     if (!person) {
-      return NextResponse.json({ error: "Person not found in org" }, { status: 404 });
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
     // Validate optional teamId

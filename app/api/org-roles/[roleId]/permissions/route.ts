@@ -3,20 +3,19 @@ import { prisma } from "@/lib/prisma";
 import { getOrgViewer } from "@/lib/getOrgViewer";
 
 export async function POST(request: Request, { params }: { params: { roleId: string } }) {
-  const viewer: any = await getOrgViewer();
-  if (!viewer?.orgId) {
+  const viewer: any = await getOrgViewer(request);
+  if (!viewer?.orgId || !(viewer?.personId || viewer?.userId)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const permissions = viewer?.permissions ?? [];
-  const canAccess = Boolean(viewer?.isTtwAdmin || viewer?.isOwner || permissions.includes("ACCESS_ADMIN_TOOLS"));
+  const canAccess = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
   if (!canAccess) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const roleId = params?.roleId;
+  const roleId = params?.roleId?.trim();
   if (!roleId) {
-    return NextResponse.json({ error: "Role not found" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   const body = await request.json().catch(() => ({}));
@@ -30,7 +29,7 @@ export async function POST(request: Request, { params }: { params: { roleId: str
     select: { id: true },
   });
   if (!role) {
-    return NextResponse.json({ error: "Role not found" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   await prisma.$transaction([

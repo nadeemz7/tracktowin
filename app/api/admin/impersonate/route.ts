@@ -1,10 +1,15 @@
 import { prisma } from "@/lib/prisma";
+import { requireSuperAdmin } from "@/lib/requireSuperAdmin";
 import { NextResponse } from "next/server";
+
+export const runtime = "nodejs";
 
 const COOKIE_NAME = "impersonatePersonId";
 const COOKIE_OPTIONS = { path: "/", httpOnly: true, sameSite: "lax" as const };
 
 export async function GET(request: Request) {
+  const forbidden = await requireSuperAdmin(request);
+  if (forbidden) return forbidden;
   const cookie = request.headers.get("cookie") || "";
   const match = cookie.match(new RegExp(`${COOKIE_NAME}=([^;]+)`));
   const personId = match?.[1];
@@ -20,6 +25,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const forbidden = await requireSuperAdmin(request);
+  if (forbidden) return forbidden;
   const body = await request.json().catch(() => ({}));
   const personId = typeof body.personId === "string" && body.personId.length > 0 ? body.personId : null;
 
@@ -46,7 +53,9 @@ export async function POST(request: Request) {
   return NextResponse.json({ person: { ...person, isOwner: ownsAgencies } }, { headers: response.headers });
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const forbidden = await requireSuperAdmin(request);
+  if (forbidden) return forbidden;
   const response = NextResponse.json({ ok: true });
   response.cookies.set(COOKIE_NAME, "", { ...COOKIE_OPTIONS, maxAge: 0 });
   return response;

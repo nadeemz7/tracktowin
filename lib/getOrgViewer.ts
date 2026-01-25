@@ -6,21 +6,25 @@ import jwt from "jsonwebtoken";
 
 export { ALL_PERMISSIONS, PERMISSION_DEFINITIONS, ROLE_PERMISSION_DEFAULTS };
 
+const COOKIE_NAME = "token";
+
 export type OrgViewer = {
   userId: string | null;
   personId: string | null;
+  fullName: string | null;
   orgId: string | null;
+  orgName: string | null;
   isAdmin: boolean;
   isOwner: boolean;
   isManager: boolean;
+  isSuperAdmin: boolean;
   impersonating: boolean;
   roleKeys: string[];
   permissions: string[];
 };
 
-function safeCookieGet(name: string): string | null {
+function safeCookieGet(store: any, name: string): string | null {
   try {
-    const store: any = cookies();
     if (!store) return null;
     const fromString = (value: string) => {
       const tokenPair = value
@@ -100,20 +104,58 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
     request = h && typeof h.get === "function" ? new Request("http://localhost", { headers: h }) : null;
   }
 
+  // Next.js 16 cookies() is async; await the store before reading values.
+  let cookieStore: any = null;
+  try {
+    cookieStore = await cookies();
+  } catch {
+    cookieStore = null;
+  }
+
   const base: any = request ? await getViewerContext(request).catch(() => null) : null;
-  const jwtUserId = getUserIdFromToken(safeCookieGet("token"));
+  const jwtUserId = getUserIdFromToken(safeCookieGet(cookieStore, COOKIE_NAME));
   const userId = typeof base?.userId === "string" ? base.userId : jwtUserId;
+  /*
+   * Viewer resolution order (highest priority first):
+   * 1) Impersonation headers (x-impersonate-person-id / x-impersonate-id)
+   * 2) Impersonation cookie (impersonatePersonId)
+   * 3) Base viewer context (getViewerContext)
+   * 4) JWT userId -> User.personId (resilient when cookies are missing)
+   * 5) Legacy cookies (personId/userId/viewerPersonId/ttw_personId)
+   *
+   * Why: JWT is source of truth; cookies can be cleared. The User.personId
+   * lookup prevents Unauthorized after redirects/onboarding. Do not reorder
+   * without understanding impersonation + auth implications.
+   */
+  let userPersonId: string | null = null;
+  let userIsSuperAdmin = false;
+  if (userId) {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { personId: true, isSuperAdmin: true },
+      });
+      userPersonId = user?.personId ?? null;
+      userIsSuperAdmin = Boolean(user?.isSuperAdmin);
+    } catch {
+      userPersonId = null;
+      userIsSuperAdmin = false;
+    }
+  }
 
   const headerImpersonate =
     request?.headers?.get("x-impersonate-person-id") ||
     request?.headers?.get("x-impersonate-id") ||
     null;
 
-  const cookieImpersonate = safeCookieGet("impersonatePersonId");
+  const cookieImpersonate = safeCookieGet(cookieStore, "impersonatePersonId");
+  const basePersonId =
+    typeof base?.personId === "string" && base.personId ? base.personId : null;
 
   // DEV FORCED FALLBACK: if no viewer, pick a user so dev is usable
   const isDev = process.env.NODE_ENV !== "production";
-  if (isDev && !base?.personId && !headerImpersonate && !cookieImpersonate) {
+  const allowDevFallback = process.env.TTW_DEV_VIEWER_FALLBACK === "1";
+  if (isDev && allowDevFallback && !basePersonId && !headerImpersonate && !cookieImpersonate) {
     const preferred =
       (await prisma.person.findFirst({
         where: { isAdmin: true },
@@ -132,6 +174,9 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
 
     if (preferred) {
       const orgId = preferred.orgId ?? null;
+      const orgName = orgId
+        ? (await prisma.org.findUnique({ where: { id: orgId }, select: { name: true } }))?.name ?? null
+        : null;
       const { roleKeys, permissions } = await resolveRoleAssignments(preferred.id, orgId);
       const roleKeySet = new Set(roleKeys);
       const roleValue = roleToString(preferred.role).toUpperCase();
@@ -144,10 +189,13 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
       return {
         userId,
         personId: preferred.id,
+        fullName: preferred.fullName ?? null,
         orgId,
+        orgName,
         isAdmin,
         isOwner,
         isManager,
+        isSuperAdmin: userIsSuperAdmin,
         impersonating: false,
         roleKeys,
         permissions,
@@ -158,21 +206,25 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
   const effectivePersonId =
     headerImpersonate ||
     cookieImpersonate ||
-    base?.personId ||
-    safeCookieGet("personId") ||
-    safeCookieGet("userId") ||
-    safeCookieGet("viewerPersonId") ||
-    safeCookieGet("ttw_personId") ||
+    basePersonId ||
+    userPersonId ||
+    safeCookieGet(cookieStore, "personId") ||
+    safeCookieGet(cookieStore, "userId") ||
+    safeCookieGet(cookieStore, "viewerPersonId") ||
+    safeCookieGet(cookieStore, "ttw_personId") ||
     null;
 
   if (!effectivePersonId) {
     return {
       userId,
       personId: null,
+      fullName: null,
       orgId: base?.orgId ?? null,
+      orgName: null,
       isAdmin: Boolean(base?.isAdmin),
       isOwner: Boolean(base?.isOwner),
       isManager: Boolean(base?.isManager),
+      isSuperAdmin: userIsSuperAdmin,
       impersonating: false,
       roleKeys: [],
       permissions: [],
@@ -180,26 +232,45 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
   }
 
   try {
-    const person: any = await prisma.person.findFirst({
+    const impersonationRequested = Boolean(headerImpersonate || cookieImpersonate);
+    let fellBackFromImpersonation = false;
+    let person: any = await prisma.person.findFirst({
       where: { id: effectivePersonId },
       include: { primaryAgency: true, role: true, team: true },
     });
 
+    if (!person && impersonationRequested) {
+      const fallbackPersonId = basePersonId || null;
+      if (fallbackPersonId) {
+        person = await prisma.person.findFirst({
+          where: { id: fallbackPersonId },
+          include: { primaryAgency: true, role: true, team: true },
+        });
+        fellBackFromImpersonation = true;
+      }
+    }
+
     if (!person) {
       return {
         userId,
-        personId: base?.personId ?? null,
+        personId: basePersonId ?? null,
+        fullName: null,
         orgId: base?.orgId ?? null,
+        orgName: null,
         isAdmin: Boolean(base?.isAdmin),
         isOwner: Boolean(base?.isOwner),
         isManager: Boolean(base?.isManager),
-        impersonating: Boolean(headerImpersonate || cookieImpersonate),
+        isSuperAdmin: userIsSuperAdmin,
+        impersonating: false,
         roleKeys: [],
         permissions: [],
       };
     }
 
     const orgId = person.orgId ?? null;
+    const orgName = orgId
+      ? (await prisma.org.findUnique({ where: { id: orgId }, select: { name: true } }))?.name ?? null
+      : null;
     const { roleKeys, permissions } = await resolveRoleAssignments(person.id, orgId);
     const roleKeySet = new Set(roleKeys);
     const roleValue = roleToString(person.role).toUpperCase();
@@ -210,11 +281,14 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
     return {
       userId,
       personId: person.id,
+      fullName: person.fullName ?? null,
       orgId,
+      orgName,
       isAdmin,
       isOwner,
       isManager,
-      impersonating: Boolean(headerImpersonate || cookieImpersonate),
+      isSuperAdmin: userIsSuperAdmin,
+      impersonating: impersonationRequested && !fellBackFromImpersonation,
       roleKeys,
       permissions,
     };
@@ -222,11 +296,14 @@ export async function getOrgViewer(req?: Request): Promise<OrgViewer> {
     console.error("[getOrgViewer] error", err);
     return {
       userId,
-      personId: base?.personId ?? null,
+      personId: basePersonId ?? null,
+      fullName: null,
       orgId: base?.orgId ?? null,
+      orgName: null,
       isAdmin: Boolean(base?.isAdmin),
       isOwner: Boolean(base?.isOwner),
       isManager: Boolean(base?.isManager),
+      isSuperAdmin: userIsSuperAdmin,
       impersonating: Boolean(headerImpersonate || cookieImpersonate),
       roleKeys: [],
       permissions: [],

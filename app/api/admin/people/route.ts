@@ -1,11 +1,19 @@
 import { prisma } from "@/lib/prisma";
+import { getOrgViewer } from "@/lib/getOrgViewer";
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+
 export async function GET(request: Request) {
+  const viewer = await getOrgViewer(request);
+  if (!viewer?.orgId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const { searchParams } = new URL(request.url);
   const q = (searchParams.get("q") || "").trim().toLowerCase();
 
   const people = await prisma.person.findMany({
+    where: { orgId: viewer.orgId },
     orderBy: { fullName: "asc" },
     select: {
       id: true,

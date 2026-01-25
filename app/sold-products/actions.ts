@@ -10,8 +10,7 @@ export async function createSoldProduct(formData: FormData) {
   const productId = String(formData.get("productId") || "");
   const dateSoldStr = String(formData.get("dateSold") || "");
   const premiumStr = String(formData.get("premium") || "");
-  const soldByPersonId = String(formData.get("soldByPersonId") || "");
-  const soldByName = String(formData.get("soldByName") || "").trim();
+  const soldByPersonId = String(formData.get("soldByPersonId") || "").trim();
   const policyId = String(formData.get("policyId") || "").trim();
   const notes = String(formData.get("notes") || "").trim();
   const quantity = Math.max(1, Number(formData.get("quantity") || 1) || 1);
@@ -26,11 +25,24 @@ export async function createSoldProduct(formData: FormData) {
   const marketingSource = String(formData.get("marketingSource") || "").trim();
   const onboarded = formData.get("onboarded") === "on";
 
-  const isValueHealth = formData.get("isValueHealth") === "on";
-  const isValueLife = formData.get("isValueLife") === "on";
-
-  if (!agencyId || !productId || !dateSoldStr || !premiumStr) return;
+  if (!agencyId || !productId || !dateSoldStr || !premiumStr || !soldByPersonId) return;
   if (!useHouseholdId && (!firstName || !lastName || !marketingSource)) return;
+
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId) return;
+
+  const agency = await prisma.agency.findUnique({
+    where: { id: agencyId },
+    select: { orgId: true },
+  });
+  if (!agency || agency.orgId !== orgId) return;
+
+  const seller = await prisma.person.findUnique({
+    where: { id: soldByPersonId },
+    select: { orgId: true },
+  });
+  if (!seller || seller.orgId !== orgId) return;
 
   const dateSold = new Date(dateSoldStr);
   const premium = Number(premiumStr);
@@ -42,25 +54,18 @@ export async function createSoldProduct(formData: FormData) {
   });
   if (!product) return;
 
-  const valueDefaults = await prisma.valuePolicyDefault.findMany({
-    where: { agencyId },
-  });
-
-  const lobName = product.lineOfBusiness.name;
-  const healthDefault = valueDefaults.find(
-    (v) => v.flagField === "isValueHealth" && v.lineOfBusiness === lobName && v.active
-  );
-  const lifeDefault = valueDefaults.find(
-    (v) => v.flagField === "isValueLife" && v.lineOfBusiness === lobName && v.active
-  );
-
+  let policyFirstName = firstName;
+  let policyLastName = lastName;
   let householdId = useHouseholdId;
   if (householdId) {
-    const exists = await prisma.household.findUnique({
+    const household = await prisma.household.findUnique({
       where: { id: householdId },
-      select: { id: true, agencyId: true },
+      select: { id: true, agencyId: true, firstName: true, lastName: true, agency: { select: { orgId: true } } },
     });
-    if (!exists || exists.agencyId !== agencyId) return;
+    if (!household || household.agency.orgId !== orgId) return;
+    if (household.agencyId !== agencyId) return;
+    policyFirstName = household.firstName;
+    policyLastName = household.lastName;
   } else {
     const household = await prisma.household.create({
       data: {
@@ -75,10 +80,6 @@ export async function createSoldProduct(formData: FormData) {
     householdId = household.id;
   }
 
-  const effectiveValueHealth =
-    isValueHealth || (!!healthDefault && premium >= healthDefault.threshold);
-  const effectiveValueLife = isValueLife || (!!lifeDefault && premium >= lifeDefault.threshold);
-
   await prisma.soldProduct.createMany({
     data: Array.from({ length: quantity }).map((_, idx) => ({
       agencyId,
@@ -87,12 +88,9 @@ export async function createSoldProduct(formData: FormData) {
       dateSold,
       premium: idx === 0 ? premium : 0, // first record holds full premium, others default to 0
       status: PolicyStatus.WRITTEN,
-      isValueHealth: effectiveValueHealth,
-      isValueLife: effectiveValueLife,
-      soldByPersonId: soldByPersonId || null,
-      soldByName: soldByName || null,
-      policyFirstName: firstName,
-      policyLastName: lastName,
+      soldByPersonId,
+      policyFirstName,
+      policyLastName,
       policyId: policyId || null,
       notes: notes || null,
     })),
@@ -168,6 +166,14 @@ export async function deleteSoldProduct(formData: FormData) {
   const returnTo = String(formData.get("returnTo") || "").trim();
   if (!soldProductId) return;
 
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId) return;
+  const sp = await prisma.soldProduct.findUnique({
+    where: { id: soldProductId },
+    select: { id: true, agency: { select: { orgId: true } } },
+  });
+  if (!sp || sp.agency.orgId !== orgId) return;
   await prisma.soldProduct.delete({ where: { id: soldProductId } });
   revalidatePath("/sold-products");
   if (returnTo) {
@@ -179,9 +185,28 @@ export async function updateHousehold(formData: FormData) {
   const householdId = String(formData.get("householdId") || "");
   const firstName = String(formData.get("hhFirstName") || "").trim();
   const lastName = String(formData.get("hhLastName") || "").trim();
+  const marketingSource = String(formData.get("marketingSource") || "").trim();
+  const hasMarketingSource = formData.has("marketingSource");
   const returnTo = String(formData.get("returnTo") || "").trim();
-  if (!householdId || !firstName || !lastName) return;
-  await prisma.household.update({ where: { id: householdId }, data: { firstName, lastName } });
+  if (!householdId) return;
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId) return;
+  const hh = await prisma.household.findUnique({
+    where: { id: householdId },
+    select: { id: true, agency: { select: { orgId: true } } },
+  });
+  if (!hh || hh.agency.orgId !== orgId) return;
+  const data: any = {};
+  if (firstName && lastName) {
+    data.firstName = firstName;
+    data.lastName = lastName;
+  }
+  if (hasMarketingSource) {
+    data.marketingSource = marketingSource ? marketingSource : null;
+  }
+  if (Object.keys(data).length === 0) return;
+  await prisma.household.update({ where: { id: householdId }, data });
   revalidatePath("/sold-products");
   if (returnTo) {
     redirect(returnTo);
@@ -196,6 +221,14 @@ export async function updatePolicyQuick(formData: FormData) {
   const dateSoldStr = String(formData.get("quickDate") || "");
   const returnTo = String(formData.get("returnTo") || "").trim();
   if (!soldProductId || !productId || !premiumStr || !dateSoldStr) return;
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId) return;
+  const sp = await prisma.soldProduct.findUnique({
+    where: { id: soldProductId },
+    select: { id: true, agency: { select: { orgId: true } } },
+  });
+  if (!sp || sp.agency.orgId !== orgId) return;
   const premium = Number(premiumStr);
   if (Number.isNaN(premium)) return;
   const dateSold = new Date(dateSoldStr);
@@ -214,9 +247,41 @@ export async function updateStatusQuick(formData: FormData) {
   const status = String(formData.get("status") || PolicyStatus.WRITTEN);
   const returnTo = String(formData.get("returnTo") || "").trim();
   if (!soldProductId) return;
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId) return;
+  const sp = await prisma.soldProduct.findUnique({
+    where: { id: soldProductId },
+    select: { id: true, agency: { select: { orgId: true } } },
+  });
+  if (!sp || sp.agency.orgId !== orgId) return;
   await prisma.soldProduct.update({
     where: { id: soldProductId },
     data: { status: status as PolicyStatus },
+  });
+  revalidatePath("/sold-products");
+  if (returnTo) {
+    redirect(returnTo);
+  }
+}
+
+export async function updatePolicySource(formData: FormData) {
+  const soldProductId = String(formData.get("soldProductId") || "");
+  const marketingSource = String(formData.get("marketingSource") || "").trim();
+  const returnTo = String(formData.get("returnTo") || "").trim();
+  const viewer: any = await getOrgViewer();
+  const orgId = viewer?.orgId ?? null;
+  if (!orgId || !soldProductId) return;
+
+  const sp = await prisma.soldProduct.findUnique({
+    where: { id: soldProductId },
+    select: { id: true, agency: { select: { orgId: true } } },
+  });
+  if (!sp || sp.agency.orgId !== orgId) return;
+
+  await prisma.soldProduct.update({
+    where: { id: soldProductId },
+    data: { marketingSourceOverride: marketingSource || null },
   });
   revalidatePath("/sold-products");
   if (returnTo) {

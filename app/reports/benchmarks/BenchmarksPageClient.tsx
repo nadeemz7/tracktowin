@@ -800,6 +800,9 @@ function BenchmarksPageClientInner({ canViewPeopleBenchmarks }: BenchmarksPageCl
   const [compareError, setCompareError] = useState<string | null>(null);
   const [compareOptions, setCompareOptions] = useState<SnapshotListItem[]>([]);
   const [compareInitialized, setCompareInitialized] = useState(false);
+  const [activePresetKey, setActivePresetKey] = useState<
+    "thisMonth" | "lastMonth" | "ytd" | "last30" | null
+  >(null);
   const startISO = useMemo(() => toISODate(start), [start]);
   const endISO = useMemo(() => toISODate(end), [end]);
   const currentYear = useMemo(() => new Date().getFullYear(), []);
@@ -1104,10 +1107,6 @@ function BenchmarksPageClientInner({ canViewPeopleBenchmarks }: BenchmarksPageCl
       cancelled = true;
     };
   }, [compareSnapshotId]);
-
-  const [activePresetKey, setActivePresetKey] = useState<
-    "thisMonth" | "lastMonth" | "ytd" | "last30" | null
-  >(null);
 
   const applyPreset = (preset: "thisMonth" | "lastMonth" | "ytd" | "last30") => {
     const base = new Date();

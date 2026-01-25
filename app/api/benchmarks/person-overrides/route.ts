@@ -31,8 +31,12 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const viewer = await getViewerContext(req);
-    if (!viewer?.orgId) {
+    if (!viewer?.orgId || !(viewer?.personId || viewer?.userId)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const isOrgAdmin = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
+    if (!isOrgAdmin) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     if (!hasBenchmarksWriteAccess(viewer)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });

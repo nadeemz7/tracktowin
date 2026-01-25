@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 type TeamType = "SALES" | "CS";
 
@@ -12,13 +13,6 @@ type AgencyWithProducts = {
     name: string;
     premiumCategory: string;
     products: { id: string; name: string; productType: string }[];
-  }[];
-  valuePolicyDefaults: {
-    flagField: string;
-    threshold: number;
-    lineOfBusiness: string;
-    active: boolean;
-    notes: string | null;
   }[];
 };
 
@@ -68,10 +62,13 @@ export function NewSoldProductForm({
   returnTo,
   onSubmit,
 }: Props) {
+  const router = useRouter();
   const [open, setOpen] = useState(openByDefault);
   const [step, setStep] = useState<"household" | "policy">(preselectedHousehold ? "policy" : "household");
   const [quantity, setQuantity] = useState(1);
   const [selectedHouseholdId, setSelectedHouseholdId] = useState(preselectedHousehold?.id || "");
+  const [searchFirstValue, setSearchFirstValue] = useState(searchFirst);
+  const [searchLastValue, setSearchLastValue] = useState(searchLast);
   const [householdDraft, setHouseholdDraft] = useState({
     firstName: preselectedHousehold?.firstName || "",
     lastName: preselectedHousehold?.lastName || "",
@@ -81,26 +78,18 @@ export function NewSoldProductForm({
     onboarded: preselectedHousehold?.onboarded || false,
   });
 
-  const defaultAgencyId = selectedAgencyId || preselectedHousehold?.agencyId || agencies[0]?.id || "";
+  const defaultAgencyId = preselectedHousehold?.agencyId || selectedAgencyId || agencies[0]?.id || "";
   const [agencyId, setAgencyId] = useState(defaultAgencyId);
-  const [agencyTouched, setAgencyTouched] = useState(false);
+  const [agencyTouched, setAgencyTouched] = useState(Boolean(preselectedHousehold));
   const initialLobId = agencies.find((a) => a.id === defaultAgencyId)?.linesOfBusiness[0]?.id || "";
   const [lineOfBusinessId, setLineOfBusinessId] = useState<string>(initialLobId);
   const [soldByPersonId, setSoldByPersonId] = useState("");
 
   const selectedAgency = agencies.find((a) => a.id === agencyId) || null;
   const linesOfBusiness = selectedAgency?.linesOfBusiness || [];
-  const valueDefaults = selectedAgency?.valuePolicyDefaults || [];
-  const selectedLob = linesOfBusiness.find((lob) => lob.id === lineOfBusinessId) || null;
   const productsForLob = linesOfBusiness.find((lob) => lob.id === lineOfBusinessId)?.products || [];
   const returnToValue = returnTo?.trim();
-
-  const healthDefault = valueDefaults.find(
-    (v) => v.flagField === "isValueHealth" && v.lineOfBusiness === selectedLob?.name && v.active
-  );
-  const lifeDefault = valueDefaults.find(
-    (v) => v.flagField === "isValueLife" && v.lineOfBusiness === selectedLob?.name && v.active
-  );
+  const hasSelectedHousehold = Boolean(selectedHouseholdId);
 
   const lobButtons = linesOfBusiness.map((lob) => ({
     id: lob.id,
@@ -126,6 +115,25 @@ export function NewSoldProductForm({
     setAgencyId(nextAgency);
     const nextAgencyData = agencies.find((a) => a.id === nextAgency);
     setLineOfBusinessId(nextAgencyData?.linesOfBusiness[0]?.id || "");
+  }
+
+  function onSearchHouseholds() {
+    const params = new URLSearchParams(window.location.search);
+    const first = searchFirstValue.trim();
+    const last = searchLastValue.trim();
+    params.set("open", "1");
+    if (first) {
+      params.set("first", first);
+    } else {
+      params.delete("first");
+    }
+    if (last) {
+      params.set("last", last);
+    } else {
+      params.delete("last");
+    }
+    const query = params.toString();
+    router.push(`${window.location.pathname}${query ? `?${query}` : ""}`);
   }
 
   return (
@@ -212,24 +220,35 @@ export function NewSoldProductForm({
                       <div style={{ fontWeight: 700, marginBottom: 10 }}>Add Customer / Policy Holder</div>
 
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-                        <form method="get" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <input type="hidden" name="open" value="1" />
-                          <input
-                            name="first"
-                            placeholder="First name"
-                            defaultValue={searchFirst}
-                            style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db", width: 180 }}
-                          />
-                          <input
-                            name="last"
-                            placeholder="Last name"
-                            defaultValue={searchLast}
-                            style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db", width: 180 }}
-                          />
-                          <button type="submit" style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", background: "#f8fafc" }}>
-                            Search households
-                          </button>
-                        </form>
+                        <input
+                          placeholder="First name"
+                          value={searchFirstValue}
+                          onChange={(e) => setSearchFirstValue(e.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter") return;
+                            event.preventDefault();
+                            onSearchHouseholds();
+                          }}
+                          style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db", width: 180 }}
+                        />
+                        <input
+                          placeholder="Last name"
+                          value={searchLastValue}
+                          onChange={(e) => setSearchLastValue(e.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter") return;
+                            event.preventDefault();
+                            onSearchHouseholds();
+                          }}
+                          style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db", width: 180 }}
+                        />
+                        <button
+                          type="button"
+                          onClick={onSearchHouseholds}
+                          style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", background: "#f8fafc" }}
+                        >
+                          Search households
+                        </button>
                       </div>
 
                       {households.length > 0 ? (
@@ -259,8 +278,12 @@ export function NewSoldProductForm({
                                     firstName: h.firstName,
                                     lastName: h.lastName,
                                     ecrmLink: h.ecrmLink || "",
-                                    marketingSource: h.marketingSource || d.marketingSource,
+                                    marketingSource: h.marketingSource || "",
                                   }));
+                                  setAgencyTouched(true);
+                                  setAgencyId(h.agencyId);
+                                  const nextAgency = agencies.find((a) => a.id === h.agencyId);
+                                  setLineOfBusinessId(nextAgency?.linesOfBusiness[0]?.id || "");
                                 }}
                               />
                               <div>
@@ -385,14 +408,13 @@ export function NewSoldProductForm({
                 {step === "policy" && (
                   <div style={{ display: "grid", gap: 16 }}>
                     <input type="hidden" name="existingHouseholdId" value={selectedHouseholdId} />
+                    {hasSelectedHousehold ? <input type="hidden" name="agencyId" value={agencyId} /> : null}
                     {!selectedHouseholdId && (
                       <>
                         <input type="hidden" name="firstName" value={householdDraft.firstName} />
                         <input type="hidden" name="lastName" value={householdDraft.lastName} />
                         <input type="hidden" name="ecrmLink" value={householdDraft.ecrmLink} />
-                        <input type="hidden" name="marketingSource" value={householdDraft.marketingSource} />
                         <input type="hidden" name="onboarded" value={householdDraft.onboarded ? "on" : ""} />
-                        <input type="hidden" name="dateSold" value={householdDraft.dateSold} />
                       </>
                     )}
 
@@ -417,14 +439,15 @@ export function NewSoldProductForm({
                         />
                       </label>
                       <label style={{ fontSize: 14, color: "#6b7280" }}>
-                        Written by (team member)
+                        Written by (team member) *
                         <select
                           name="soldByPersonId"
+                          required
                           value={soldByPersonId}
                           onChange={(e) => onSellerChange(e.target.value)}
                           style={{ padding: 12, width: "100%", borderRadius: 10, border: "1px solid #d1d5db", marginTop: 4 }}
                         >
-                          <option value="">Select team member (optional)</option>
+                          <option value="">Select team member</option>
                           {people.map((p) => (
                             <option key={p.id} value={p.id}>
                               {p.fullName}
@@ -433,22 +456,15 @@ export function NewSoldProductForm({
                         </select>
                       </label>
                       <label style={{ fontSize: 14, color: "#6b7280" }}>
-                        Written by (manual)
-                        <input
-                          name="soldByName"
-                          placeholder="Name (optional)"
-                          style={{ padding: 12, width: "100%", borderRadius: 10, border: "1px solid #d1d5db", marginTop: 4 }}
-                        />
-                      </label>
-                      <label style={{ fontSize: 14, color: "#6b7280" }}>
                         Source *
                         <select
                           name="marketingSource"
-                          required
+                          required={!hasSelectedHousehold}
+                          disabled={hasSelectedHousehold}
                           defaultValue={householdDraft.marketingSource}
                           style={{ padding: 12, width: "100%", borderRadius: 10, border: "1px solid #d1d5db", marginTop: 4 }}
                         >
-                          <option value="">Select source</option>
+                          <option value="">{hasSelectedHousehold ? "(Household source)" : "Select source"}</option>
                           <option value="ILP">ILP</option>
                           <option value="Referral">Referral</option>
                           <option value="Outbound Call">Outbound Call</option>
@@ -463,6 +479,7 @@ export function NewSoldProductForm({
                           name="agencyId"
                           required
                           value={agencyId}
+                          disabled={hasSelectedHousehold}
                           onChange={(e) => {
                             const next = e.target.value;
                             setAgencyTouched(true);
@@ -578,28 +595,6 @@ export function NewSoldProductForm({
                         </label>
                       </div>
 
-                      <fieldset style={{ padding: 12, border: "1px solid #ddd", borderRadius: 8, marginTop: 6 }}>
-                        <legend>Value Policy Flags</legend>
-                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                          <label style={{ display: "inline-flex", gap: 8 }}>
-                            <input name="isValueHealth" type="checkbox" />
-                            Value Health
-                          </label>
-                          <label style={{ display: "inline-flex", gap: 8 }}>
-                            <input name="isValueLife" type="checkbox" />
-                            Value Life
-                          </label>
-                        </div>
-                        <div style={{ color: "#555", fontSize: 13, marginTop: 8 }}>
-                          {healthDefault
-                            ? `Value Health auto-checks if premium ≥ ${healthDefault.threshold} on ${healthDefault.lineOfBusiness}.`
-                            : "No auto-check rule for Value Health on this LoB."}
-                          <br />
-                          {lifeDefault
-                            ? `Value Life auto-checks if premium ≥ ${lifeDefault.threshold} on ${lifeDefault.lineOfBusiness}.`
-                            : "No auto-check rule for Value Life on this LoB."}
-                        </div>
-                      </fieldset>
                     </div>
 
                     <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", paddingTop: 8, borderTop: "1px solid #e5e7eb" }}>

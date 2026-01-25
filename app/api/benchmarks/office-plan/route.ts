@@ -182,7 +182,6 @@ async function resolveViewer(req: Request) {
 export async function GET(req: Request) {
   try {
     const { viewer, isDev } = await resolveViewer(req);
-    const canWrite = hasBenchmarksWriteAccess(viewer);
 
     // In dev, allow the page to render even if auth is missing by returning plan:null
     if (!viewer?.orgId || !viewer?.personId) {
@@ -199,10 +198,6 @@ export async function GET(req: Request) {
         });
       }
       return NextResponse.json({ error: "Unauthorized", routeVersion: ROUTE_VERSION }, { status: 401 });
-    }
-
-    if (!canWrite) {
-      return NextResponse.json({ error: "Forbidden", routeVersion: ROUTE_VERSION }, { status: 403 });
     }
 
     const url = new URL(req.url);
@@ -256,10 +251,14 @@ export async function POST(req: Request) {
     const { viewer, isDev } = await resolveViewer(req);
     const canWrite = hasBenchmarksWriteAccess(viewer);
 
-    // ✅ Key fix: in dev, require orgId only; in prod require orgId + personId
-    if (!viewer?.orgId || (!isDev && !viewer?.personId)) {
+    if (!viewer?.orgId || !(viewer?.personId || viewer?.userId)) {
       if (isDev) console.log("[office-plan][POST][viewer]", viewer);
       return NextResponse.json({ error: "Unauthorized", routeVersion: ROUTE_VERSION }, { status: 401 });
+    }
+
+    const isOrgAdmin = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
+    if (!isOrgAdmin) {
+      return NextResponse.json({ error: "Forbidden", routeVersion: ROUTE_VERSION }, { status: 403 });
     }
 
     if (!canWrite) {
@@ -322,9 +321,13 @@ export async function DELETE(req: Request) {
     const { viewer, isDev } = await resolveViewer(req);
     const canWrite = hasBenchmarksWriteAccess(viewer);
 
-    // ✅ Key fix: in dev, require orgId only; in prod require orgId + personId
-    if (!viewer?.orgId || (!isDev && !viewer?.personId)) {
+    if (!viewer?.orgId || !(viewer?.personId || viewer?.userId)) {
       return NextResponse.json({ error: "Unauthorized", routeVersion: ROUTE_VERSION }, { status: 401 });
+    }
+
+    const isOrgAdmin = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
+    if (!isOrgAdmin) {
+      return NextResponse.json({ error: "Forbidden", routeVersion: ROUTE_VERSION }, { status: 403 });
     }
 
     if (!canWrite) {

@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
+import { getOrgViewer } from "@/lib/getOrgViewer";
 import { AppShellAdminLink, AppShellNav } from "./AppShellClient";
 
 type AppShellProps = {
@@ -52,12 +53,18 @@ const NAV_LINKS: NavItem[] = [
   { href: "/dev", label: "Dev Notes", icon: "📝" },
 ];
 
-export function AppShell({ title, subtitle, actions, children, showAdminLink = true }: AppShellProps) {
+export async function AppShell({ title, subtitle, actions, children, showAdminLink = true }: AppShellProps) {
+  const viewer = await getOrgViewer();
+  const isSuperAdmin = Boolean(viewer?.isSuperAdmin);
+  const baseAllowAdmin = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
+  const roleLabel = viewer?.isOwner ? "Owner" : viewer?.isAdmin ? "Admin" : viewer?.isManager ? "Manager" : "Team Member";
+  const viewerName = viewer?.fullName || "Unknown User";
+  const orgName = viewer?.orgName || "Unknown Org";
   return (
     <div className="app-shell">
       <aside className="app-shell__sidebar">
         <div className="app-shell__sidebar-brand">TrackToWin</div>
-        <AppShellNav navLinks={NAV_LINKS} />
+        <AppShellNav navLinks={NAV_LINKS} baseAllowAdmin={baseAllowAdmin} />
       </aside>
 
       <div className="app-shell__main">
@@ -68,14 +75,17 @@ export function AppShell({ title, subtitle, actions, children, showAdminLink = t
               {subtitle ? <p className="app-shell__subtitle">{subtitle}</p> : null}
             </div>
             <div className="app-shell__actions" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <div style={{ fontSize: 12, color: "#6b7280", textAlign: "right" }}>
+                {viewerName} • {orgName} • {roleLabel}
+              </div>
               {actions}
-              <AppShellAdminLink showAdminLink={showAdminLink} />
+              <AppShellAdminLink showAdminLink={showAdminLink} isSuperAdmin={isSuperAdmin} baseAllowAdmin={baseAllowAdmin} />
             </div>
           </div>
         )}
 
         <main className="app-shell__content">
-          <ImpersonationBanner />
+          {isSuperAdmin ? <ImpersonationBanner /> : null}
           {children}
         </main>
       </div>

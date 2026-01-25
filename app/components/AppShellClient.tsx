@@ -12,17 +12,22 @@ type NavItem = {
   children?: { href: string; label: string }[];
 };
 
-function useAllowAdmin() {
+function useAllowAdmin(baseAllowAdmin: boolean) {
   const [impersonated, setImpersonated] = useState<{ id: string; isAdmin?: boolean; isManager?: boolean; isOwner?: boolean } | null>(null);
-  const [hasImpersonationCookie, setHasImpersonationCookie] = useState(false);
-  const [impersonationChecked, setImpersonationChecked] = useState(false);
+  const [hasImpersonationCookie, setHasImpersonationCookie] = useState<boolean | null>(null);
 
   useEffect(() => {
     // Detect cookie early to avoid a flash of admin nav while impersonating a non-admin.
+    let hasCookie = false;
     if (typeof document !== "undefined") {
-      const hasCookie = document.cookie.includes("impersonatePersonId=");
       const hasSessionFlag = sessionStorage.getItem("ttw_impersonating") === "1";
-      setHasImpersonationCookie(hasCookie || hasSessionFlag);
+      hasCookie = document.cookie.includes("impersonatePersonId=") || hasSessionFlag;
+    }
+    setHasImpersonationCookie(hasCookie);
+
+    if (!hasCookie) {
+      setImpersonated(null);
+      return;
     }
 
     async function check() {
@@ -36,21 +41,22 @@ function useAllowAdmin() {
       }
     }
     check();
-    setImpersonationChecked(true);
   }, []);
 
-  return impersonated
-    ? Boolean(impersonated.isAdmin || impersonated.isManager || impersonated.isOwner)
-    : hasImpersonationCookie
-      ? false // if a cookie exists but we don't yet have role info, hide admin to avoid a flash
-      : impersonationChecked; // only allow by default after we've checked for cookies once
+  if (hasImpersonationCookie === null) return false;
+  if (hasImpersonationCookie) {
+    if (!impersonated) return false;
+    return Boolean(impersonated.isAdmin || impersonated.isManager || impersonated.isOwner);
+  }
+  return Boolean(baseAllowAdmin);
 }
 
-export function AppShellNav({ navLinks }: { navLinks: NavItem[] }) {
+export function AppShellNav({ navLinks, baseAllowAdmin = false }: { navLinks: NavItem[]; baseAllowAdmin?: boolean }) {
   const pathname = usePathname();
-  const allowAdmin = useAllowAdmin();
+  const allowAdmin = useAllowAdmin(baseAllowAdmin);
+  const canSeeAdminTools = allowAdmin;
 
-  const nav = allowAdmin
+  const nav = canSeeAdminTools
     ? navLinks
     : navLinks.filter((n) => n.href !== "/admin").map((n) => {
         if (n.href !== "/reports" || !n.children) return n;
@@ -98,10 +104,19 @@ export function AppShellNav({ navLinks }: { navLinks: NavItem[] }) {
   );
 }
 
-export function AppShellAdminLink({ showAdminLink = true }: { showAdminLink?: boolean }) {
-  const allowAdmin = useAllowAdmin();
+export function AppShellAdminLink({
+  showAdminLink = true,
+  isSuperAdmin = false,
+  baseAllowAdmin: _baseAllowAdmin = false,
+}: {
+  showAdminLink?: boolean;
+  isSuperAdmin?: boolean;
+  baseAllowAdmin?: boolean;
+}) {
+  const showImpersonation = Boolean(isSuperAdmin);
+  if (!showImpersonation) return null;
 
-  return showAdminLink && allowAdmin ? (
+  return showAdminLink ? (
     <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
       <Link href="/admin" className="btn" style={{ textDecoration: "none", padding: "6px 12px" }}>
         TrackToWin Admin

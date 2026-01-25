@@ -83,7 +83,7 @@ export const DEFAULT_LOBS = [
 export const DEFAULT_TEAMS = [
   { name: "Sales", roles: ["Sales Associate", "Sales Representative", "Senior Sales"] },
   { name: "Customer Service", roles: ["CS Associate", "CS Representative", "CS Specialist"] },
-  { name: "Team Leader", roles: ["Lead", "Manager"] },
+  { name: "Management", roles: ["Owner", "Issuer"] },
 ];
 
 export const DEFAULT_FIELDS = [

@@ -11,6 +11,8 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<null | AuthAction>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [registerFirstName, setRegisterFirstName] = useState("");
+  const [registerLastName, setRegisterLastName] = useState("");
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
   const [registerConfirm, setRegisterConfirm] = useState("");
@@ -73,6 +75,8 @@ export default function LoginPage() {
 
   const closeRegisterModal = () => {
     setRegisterOpen(false);
+    setRegisterFirstName("");
+    setRegisterLastName("");
     setRegisterEmail("");
     setRegisterPassword("");
     setRegisterConfirm("");
@@ -81,9 +85,16 @@ export default function LoginPage() {
   };
 
   const handleRegister = async () => {
+    const trimmedFirstName = registerFirstName.trim();
+    const trimmedLastName = registerLastName.trim();
     const trimmedEmail = registerEmail.trim();
     const trimmedPassword = registerPassword.trim();
     const trimmedConfirm = registerConfirm.trim();
+
+    if (!trimmedFirstName || !trimmedLastName) {
+      setRegisterError("First and last name are required.");
+      return;
+    }
 
     if (!trimmedEmail || !trimmedPassword || !trimmedConfirm) {
       setRegisterError("All fields are required.");
@@ -105,6 +116,8 @@ export default function LoginPage() {
         body: JSON.stringify({
           username: trimmedEmail,
           password: trimmedPassword,
+          firstName: trimmedFirstName,
+          lastName: trimmedLastName,
           action: "register",
         }),
         redirect: "follow",
@@ -185,6 +198,8 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={() => {
+              setRegisterFirstName("");
+              setRegisterLastName("");
               setRegisterEmail("");
               setRegisterPassword("");
               setRegisterConfirm("");
@@ -219,6 +234,39 @@ export default function LoginPage() {
             </div>
 
             <div className="mt-5 flex flex-col gap-4">
+              <label className="flex flex-col gap-2 text-sm text-slate-600">
+                First name
+                <input
+                  type="text"
+                  value={registerFirstName}
+                  onChange={(event) => {
+                    setRegisterFirstName(event.target.value);
+                    if (registerError) setRegisterError("");
+                  }}
+                  placeholder="Enter your first name"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  autoComplete="given-name"
+                  required
+                  disabled={registerBusy}
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-sm text-slate-600">
+                Last name
+                <input
+                  type="text"
+                  value={registerLastName}
+                  onChange={(event) => {
+                    setRegisterLastName(event.target.value);
+                    if (registerError) setRegisterError("");
+                  }}
+                  placeholder="Enter your last name"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  autoComplete="family-name"
+                  required
+                  disabled={registerBusy}
+                />
+              </label>
+
               <label className="flex flex-col gap-2 text-sm text-slate-600">
                 Email
                 <input

@@ -1,11 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
-import { OfficePayload, OnboardingPayload, makeOffice } from "./config";
+import { DEFAULT_TEAMS, OfficePayload, OnboardingPayload, makeOffice } from "./config";
 
 type WizardOffice = OfficePayload & { address?: string };
+
+function splitOwnerName(fullName: string) {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: "", lastName: "" };
+  const firstName = parts.shift() || "";
+  const lastName = parts.join(" ");
+  return { firstName, lastName };
+}
 
 const fieldBaseStyle: CSSProperties = {
   border: "1px solid #d1d5db",
@@ -28,20 +36,25 @@ const selectStyle: CSSProperties = {
 
 export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: FormData) => void }) {
   const router = useRouter();
-  const [ownerName, setOwnerName] = useState("");
+  const defaultTeams = DEFAULT_TEAMS.map((t) => ({ name: t.name, roles: [...t.roles] }));
+  const [ownerFirstName, setOwnerFirstName] = useState("");
+  const [ownerLastName, setOwnerLastName] = useState("");
+  const [ownerNameTouched, setOwnerNameTouched] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [officeCount, setOfficeCount] = useState(1);
   const sameForAll = true;
   const [step, setStep] = useState(0);
   const [isOpen, setIsOpen] = useState(true);
   const [showBanner, setShowBanner] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitBusy, setSubmitBusy] = useState(false);
   const [showOwnerNameError, setShowOwnerNameError] = useState(false);
   const [showProfileNameError, setShowProfileNameError] = useState(false);
   const steps = ["Profile", "LoBs & Products", "Teams & Roles", "Roster", "Household Fields & Buckets"];
   const [offices, setOffices] = useState<WizardOffice[]>([
-    { ...makeOffice("Legacy"), address: "" },
-    { ...makeOffice("MOA"), address: "" },
-    { ...makeOffice("TROA"), address: "" },
+    { ...makeOffice("Legacy"), teams: defaultTeams.map((t) => ({ name: t.name, roles: [...t.roles] })), address: "" },
+    { ...makeOffice("MOA"), teams: defaultTeams.map((t) => ({ name: t.name, roles: [...t.roles] })), address: "" },
+    { ...makeOffice("TROA"), teams: defaultTeams.map((t) => ({ name: t.name, roles: [...t.roles] })), address: "" },
   ]);
 
   const officeTabs = useMemo(() => offices.slice(0, officeCount), [offices, officeCount]);
@@ -52,7 +65,10 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
     officeTabs.some((office) =>
       office.people.some((person) => !person.primaryOfficeName || !person.primaryOfficeName.trim())
     );
-  const ownerNameMissing = !ownerName.trim();
+  const ownerName = [ownerFirstName, ownerLastName].filter(Boolean).join(" ").trim();
+  const ownerFirstNameMissing = !ownerFirstName.trim();
+  const ownerLastNameMissing = !ownerLastName.trim();
+  const ownerNameMissing = ownerFirstNameMissing || ownerLastNameMissing;
   const profileNameMissing = !profileName.trim();
   const rosterStepIndex = steps.indexOf("Roster");
   const isRosterStep = step === rosterStepIndex;
@@ -63,6 +79,30 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
     (isRosterStep && rosterPrimaryOfficeMissing);
 
   const suffixes = ["Legacy", "MOA", "TROA"];
+
+  useEffect(() => {
+    if (ownerNameTouched || ownerFirstName.trim() || ownerLastName.trim()) return;
+    let canceled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/login", { cache: "no-store" });
+        const json = await res.json().catch(() => ({} as any));
+        const fullName = typeof json?.fullName === "string" ? json.fullName.trim() : "";
+        if (!fullName || canceled) return;
+        const { firstName, lastName } = splitOwnerName(fullName);
+        if (canceled || (!firstName && !lastName)) return;
+        setOwnerFirstName(firstName);
+        setOwnerLastName(lastName);
+        const nextOwnerName = [firstName, lastName].filter(Boolean).join(" ").trim();
+        if (nextOwnerName) applyDefaultOfficeNames(nextOwnerName, officeCount);
+      } catch {
+        return;
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, [ownerNameTouched, ownerFirstName, ownerLastName, officeCount]);
 
   function applyDefaultOfficeNames(nextOwner: string, nextCount: number) {
     setOffices((prev) =>
@@ -163,16 +203,23 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
   }
 
   async function handleSubmit() {
+    setSubmitError(null);
+    if (submitBusy) return;
+    setSubmitBusy(true);
     if (ownerNameMissing || profileNameMissing) {
       setShowOwnerNameError(ownerNameMissing);
       setShowProfileNameError(profileNameMissing);
       setStep(0);
+      setSubmitBusy(false);
       return;
     }
     const hasSingleOffice = officeTabs.length === 1;
     const singleOfficeName = officeOptions[0] || "Office 1";
     const baseOffice = officeTabs[0];
-    if (!baseOffice) return;
+    if (!baseOffice) {
+      setSubmitBusy(false);
+      return;
+    }
     const normalizedBaseOffice = {
       ...baseOffice,
       address: baseOffice.address ?? "",
@@ -202,10 +249,18 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
     } as OnboardingPayload;
     const formData = new FormData();
     formData.append("payload", JSON.stringify(payload));
-    await onSubmit(formData);
-    setIsOpen(false);
-    setShowBanner(true);
-    router.push("/agencies");
+    try {
+      await onSubmit(formData);
+      setIsOpen(false);
+      setShowBanner(true);
+      router.push("/agencies");
+    } catch (err) {
+      console.error("[onboarding] submit failed", err);
+      setSubmitError("Onboarding failed. Please refresh and try again.");
+      setShowBanner(false);
+    } finally {
+      setSubmitBusy(false);
+    }
   }
 
   return (
@@ -261,11 +316,30 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
                   color: "#283618",
                   textDecoration: "none",
                   fontWeight: 700,
+                  pointerEvents: submitBusy ? "none" : "auto",
+                  opacity: submitBusy ? 0.6 : 1,
                 }}
+                aria-disabled={submitBusy}
+                tabIndex={submitBusy ? -1 : 0}
               >
                 Exit
               </Link>
             </div>
+            {submitError ? (
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #fecaca",
+                  background: "#fee2e2",
+                  color: "#991b1b",
+                  fontWeight: 600,
+                }}
+              >
+                {submitError}
+              </div>
+            ) : null}
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
               {steps.map((s, idx) => (
                 <button
@@ -299,25 +373,50 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
                 <h2 style={{ margin: 0 }}>Office Profile</h2>
                 <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
                   <label>
-                    Owner / Agent full name
+                    Owner / Agent first name
                     <br />
                     <input
-                      value={ownerName}
+                      value={ownerFirstName}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setOwnerName(val);
-                        applyDefaultOfficeNames(val, officeCount);
-                        if (val.trim()) {
+                        setOwnerNameTouched(true);
+                        setOwnerFirstName(val);
+                        const nextOwnerName = [val, ownerLastName].filter(Boolean).join(" ").trim();
+                        applyDefaultOfficeNames(nextOwnerName, officeCount);
+                        if (val.trim() && ownerLastName.trim()) {
                           setShowOwnerNameError(false);
                         }
                       }}
-                      placeholder="e.g., Nadeem Moustafa"
+                      placeholder="e.g., Nadeem"
+                      required
+                      aria-invalid={showOwnerNameError && ownerNameMissing}
+                      style={{ ...inputStyle, padding: 10 }}
+                    />
+                  </label>
+                  <label>
+                    Owner / Agent last name
+                    <br />
+                    <input
+                      value={ownerLastName}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setOwnerNameTouched(true);
+                        setOwnerLastName(val);
+                        const nextOwnerName = [ownerFirstName, val].filter(Boolean).join(" ").trim();
+                        applyDefaultOfficeNames(nextOwnerName, officeCount);
+                        if (val.trim() && ownerFirstName.trim()) {
+                          setShowOwnerNameError(false);
+                        }
+                      }}
+                      placeholder="e.g., Moustafa"
                       required
                       aria-invalid={showOwnerNameError && ownerNameMissing}
                       style={{ ...inputStyle, padding: 10 }}
                     />
                     {showOwnerNameError && ownerNameMissing ? (
-                      <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>Owner name is required.</div>
+                      <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>
+                        First and last name are required.
+                      </div>
                     ) : null}
                   </label>
                   <label>
@@ -478,8 +577,22 @@ export default function OnboardingWizard({ onSubmit }: { onSubmit: (formData: Fo
                 ) : null}
               </div>
               {isLastStep ? (
-                <button type="button" onClick={handleSubmit} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #e31836", background: "#e31836", color: "#f8f9fa", fontWeight: 700 }}>
-                  Save &amp; Finish
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={submitBusy}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 10,
+                    border: "1px solid #e31836",
+                    background: "#e31836",
+                    color: "#f8f9fa",
+                    fontWeight: 700,
+                    opacity: submitBusy ? 0.7 : 1,
+                    cursor: submitBusy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {submitBusy ? "Saving..." : "Save & Finish"}
                 </button>
               ) : null}
             </div>

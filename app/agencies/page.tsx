@@ -2,16 +2,44 @@ import { AppShell } from "@/app/components/AppShell";
 import ConfirmSubmitButton from "@/app/components/ConfirmSubmitButton";
 import { getOrgViewer } from "@/lib/getOrgViewer";
 import { prisma } from "@/lib/prisma";
-import { addPerson, createAgency, deleteAgency, quickCreate, updatePrimaryAgency } from "./actions";
+import { createAgency, deleteAgency, quickCreate } from "./actions";
+import { revalidatePath } from "next/cache";
 import Link from "next/link";
 
 export default async function AgenciesPage() {
   const viewer: any = await getOrgViewer();
   const orgId = viewer?.orgId ?? null;
-  if (!orgId) {
+  const viewerPersonId = viewer?.personId ?? null;
+  const isDev = process.env.NODE_ENV !== "production";
+  if (!orgId || !viewerPersonId) {
     return (
       <AppShell title="Unauthorized">
         <div>Unauthorized.</div>
+        {isDev ? (
+          <pre
+            style={{
+              marginTop: 12,
+              padding: 12,
+              background: "#f3f4f6",
+              borderRadius: 8,
+              fontSize: 12,
+            }}
+          >
+            {JSON.stringify(
+              {
+                userId: viewer?.userId ?? null,
+                personId: viewer?.personId ?? null,
+                orgId: viewer?.orgId ?? null,
+                impersonating: !!viewer?.impersonating,
+                isAdmin: !!viewer?.isAdmin,
+                isOwner: !!viewer?.isOwner,
+                isManager: !!viewer?.isManager,
+              },
+              null,
+              2
+            )}
+          </pre>
+        ) : null}
       </AppShell>
     );
   }
@@ -47,6 +75,77 @@ export default async function AgenciesPage() {
     })
   );
   const statMap = new Map(stats.map((s) => [s.id, s]));
+
+  async function addPerson(formData: FormData) {
+    "use server";
+    const fullName = String(formData.get("fullName") || "").trim();
+    const email = String(formData.get("email") || "").trim();
+    const teamType = String(formData.get("teamType") || "SALES");
+    const primaryAgencyId = String(formData.get("primaryAgencyId") || "");
+    if (!fullName || !primaryAgencyId) return;
+
+    const viewer = await getOrgViewer();
+    const orgId = viewer?.orgId ?? null;
+    const personId = viewer?.personId ?? null;
+    if (!orgId || !personId) return;
+
+    const agency = await prisma.agency.findUnique({
+      where: { id: primaryAgencyId },
+      select: { orgId: true },
+    });
+    if (!agency || agency.orgId !== orgId) return;
+
+    await prisma.person.create({
+      data: {
+        fullName,
+        email: email || null,
+        teamType: teamType === "CS" ? "CS" : "SALES",
+        primaryAgencyId,
+        active: true,
+      },
+    });
+    revalidatePath("/agencies");
+    revalidatePath(`/agencies/${primaryAgencyId}`);
+  }
+
+  async function updatePrimaryAgency(formData: FormData) {
+    "use server";
+    const personId = String(formData.get("personId") || "");
+    const primaryAgencyId = String(formData.get("primaryAgencyId") || "");
+    if (!personId || !primaryAgencyId) return;
+
+    const viewer = await getOrgViewer();
+    const orgId = viewer?.orgId ?? null;
+    const viewerPersonId = viewer?.personId ?? null;
+    if (!orgId || !viewerPersonId) return;
+
+    const agency = await prisma.agency.findUnique({
+      where: { id: primaryAgencyId },
+      select: { orgId: true },
+    });
+    if (!agency || agency.orgId !== orgId) return;
+
+    const person = await prisma.person.findUnique({
+      where: { id: personId },
+      select: { id: true, orgId: true, primaryAgencyId: true },
+    });
+    if (!person) return;
+    if (person.orgId) {
+      if (person.orgId !== orgId) return;
+    } else if (person.primaryAgencyId) {
+      const personAgency = await prisma.agency.findUnique({
+        where: { id: person.primaryAgencyId },
+        select: { orgId: true },
+      });
+      if (!personAgency || personAgency.orgId !== orgId) return;
+    } else {
+      return;
+    }
+
+    await prisma.person.update({ where: { id: personId }, data: { primaryAgencyId } });
+    revalidatePath("/agencies");
+    revalidatePath(`/agencies/${primaryAgencyId}`);
+  }
 
   return (
     <AppShell title="Agencies" subtitle="Create a new agency with starter lines of business.">

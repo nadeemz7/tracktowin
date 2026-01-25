@@ -13,17 +13,12 @@ async function createFromPayload(payload: OnboardingPayload) {
   if (!ownerName) {
     throw new Error("Owner name is required.");
   }
-  const ownerNameNormalized = ownerName.toLowerCase();
   const viewer: any = await getOrgViewer();
+  const viewerUserId = viewer?.userId ?? null;
+  const viewerPersonId = viewer?.personId ?? null;
   let orgId = viewer?.orgId ?? null;
   if (!orgId) {
-    const existingOrg = await prisma.org.findFirst({ orderBy: { createdAt: "asc" } });
-    if (existingOrg) {
-      orgId = existingOrg.id;
-    } else {
-      const createdOrg = await prisma.org.create({ data: { name: "TrackToWin Dev Org" } });
-      orgId = createdOrg.id;
-    }
+    throw new Error("Unauthorized: orgId not resolved for viewer.");
   }
 
   // First create all agencies (buckets) so we have ids for cross-office references
@@ -127,8 +122,13 @@ async function createFromPayload(payload: OnboardingPayload) {
   }
 
   const ownerPrimaryAgencyId = createdAgencies[0]?.id ?? null;
-  let ownerCreated = false;
-  let ownerPersonId: string | null = null;
+  let ownerPersonId: string | null = viewerPersonId;
+  const ownerUpdateData = {
+    fullName: ownerName,
+    isAdmin: true,
+    isManager: true,
+    ...(ownerPrimaryAgencyId ? { primaryAgencyId: ownerPrimaryAgencyId } : {}),
+  };
 
   // Now create teams/roles/people/fields with correct agency IDs
   for (const office of payload.offices) {
@@ -174,14 +174,10 @@ async function createFromPayload(payload: OnboardingPayload) {
 
       const defaultPrimaryAgencyId =
         createdAgencies.find((a) => a.name === (person.primaryOfficeName || office.name))?.id || agency.id;
-      const isOwnerMatch = person.fullName.trim().toLowerCase() === ownerNameNormalized;
-      if (isOwnerMatch) {
-        ownerCreated = true;
-      }
-      const primaryAgencyId = isOwnerMatch ? ownerPrimaryAgencyId : defaultPrimaryAgencyId;
+      const primaryAgencyId = defaultPrimaryAgencyId;
       const email = person.email?.trim() || "";
       const existingPerson = email
-        ? await prisma.person.findFirst({ where: { orgId, email } })
+        ? await prisma.person.findFirst({ where: { orgId, email: { equals: email, mode: "insensitive" } } })
         : await prisma.person.findFirst({ where: { orgId, fullName: person.fullName } });
 
       const personData = {
@@ -192,8 +188,8 @@ async function createFromPayload(payload: OnboardingPayload) {
         teamId: team?.id || null,
         roleId: role?.id || null,
         orgId,
-        isAdmin: isOwnerMatch ? true : person.isAdmin,
-        isManager: isOwnerMatch ? true : person.isManager,
+        isAdmin: person.isAdmin,
+        isManager: person.isManager,
         primaryAgencyId,
       };
 
@@ -202,16 +198,10 @@ async function createFromPayload(payload: OnboardingPayload) {
           where: { id: existingPerson.id },
           data: personData,
         });
-        if (isOwnerMatch) {
-          ownerPersonId = updatedPerson.id;
-        }
       } else {
         const createdPerson = await prisma.person.create({
           data: personData,
         });
-        if (isOwnerMatch) {
-          ownerPersonId = createdPerson.id;
-        }
       }
     }
 
@@ -248,7 +238,13 @@ async function createFromPayload(payload: OnboardingPayload) {
     }
   }
 
-  if (!ownerCreated) {
+  if (viewerPersonId) {
+    await prisma.person.update({
+      where: { id: viewerPersonId },
+      data: ownerUpdateData,
+    });
+    ownerPersonId = viewerPersonId;
+  } else {
     const existingOwner = await prisma.person.findFirst({ where: { orgId, fullName: ownerName } });
     const ownerData = {
       fullName: ownerName,
@@ -283,7 +279,7 @@ async function createFromPayload(payload: OnboardingPayload) {
     ownerPersonId = ownerPerson?.id ?? null;
   }
 
-  const userId = viewer?.userId ?? null;
+  const userId = viewerUserId;
   if (userId && ownerPersonId) {
     await prisma.user.update({
       where: { id: userId },
@@ -333,8 +329,7 @@ export default function OnboardingPage({ searchParams }: { searchParams?: { succ
     const viewer: any = await getOrgViewer();
     let orgId = viewer?.orgId ?? null;
     if (!orgId) {
-      const existingOrg = await prisma.org.findFirst({ orderBy: { createdAt: "asc" } });
-      orgId = existingOrg?.id ?? null;
+      throw new Error("Unauthorized: orgId not resolved for viewer.");
     }
     // Seed default WTD + activities/teams
     for (const office of payload.offices) {

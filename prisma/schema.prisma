@@ -28,6 +28,10 @@ model Org {
   checkInTemplates   CheckInTemplate[]
   checkInAssignments TeamCheckInTemplateAssignment[]
   checkInSubmissions CheckInSubmission[]
+  personnelNotes     PersonnelNote[]
+  personnelNoteEdits PersonnelNoteEdit[]
+  personnelDocuments PersonnelDocument[]
+  personnelWarnings  PersonnelWarning[]
 }
 
 model OrgRole {
@@ -279,6 +283,15 @@ model Person {
   soldProducts         SoldProduct[]
   checkInSubmissionsReceived CheckInSubmission[] @relation("CheckInSubmissionPerson")
   checkInSubmissionsCreated  CheckInSubmission[] @relation("CheckInSubmissionCreator")
+  personnelNotesReceived     PersonnelNote[] @relation("PersonnelNotePerson")
+  personnelNotesCreated      PersonnelNote[] @relation("PersonnelNoteCreator")
+  personnelNotesArchived     PersonnelNote[] @relation("PersonnelNoteArchiver")
+  personnelNoteEditsMade     PersonnelNoteEdit[] @relation("PersonnelNoteEditor")
+  personnelDocumentsReceived PersonnelDocument[] @relation("PersonnelDocumentPerson")
+  personnelDocumentsUploaded PersonnelDocument[] @relation("PersonnelDocumentUploader")
+  personnelWarningsReceived  PersonnelWarning[] @relation("PersonnelWarningPerson")
+  personnelWarningsCreated   PersonnelWarning[] @relation("PersonnelWarningCreator")
+  personnelWarningsResolved  PersonnelWarning[] @relation("PersonnelWarningResolver")
   winAssignments       WinTheDayPlanPersonAssignment?
   benchOverride        BenchPersonOverride?
   orgInvites           OrgInvite[]
@@ -725,6 +738,102 @@ model CheckInSubmission {
   @@index([orgId, periodStart])
   @@index([personId, periodStart])
   @@index([templateId, periodStart])
+}
+
+model PersonnelNote {
+  id                String   @id @default(cuid())
+  orgId             String
+  personId          String
+  noteDate          DateTime
+  body              String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  createdByPersonId String
+  archivedAt        DateTime?
+  archivedByPersonId String?
+
+  org             Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  person          Person @relation("PersonnelNotePerson", fields: [personId], references: [id], onDelete: Cascade)
+  createdByPerson Person @relation("PersonnelNoteCreator", fields: [createdByPersonId], references: [id], onDelete: Cascade)
+  archivedByPerson Person? @relation("PersonnelNoteArchiver", fields: [archivedByPersonId], references: [id], onDelete: SetNull)
+
+  edits     PersonnelNoteEdit[]
+  documents PersonnelDocument[]
+
+  @@index([orgId])
+  @@index([orgId, archivedAt])
+  @@index([personId, noteDate])
+}
+
+model PersonnelNoteEdit {
+  id               String   @id @default(cuid())
+  orgId            String
+  noteId           String
+  previousBody     String
+  nextBody         String
+  editedAt         DateTime @default(now())
+  editedByPersonId String
+
+  org            Org            @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  note           PersonnelNote  @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  editedByPerson Person         @relation("PersonnelNoteEditor", fields: [editedByPersonId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([noteId, editedAt])
+}
+
+model PersonnelWarning {
+  id                 String   @id @default(cuid())
+  orgId              String
+  personId           String
+  issuedAt           DateTime
+  type               String
+  severity           String
+  summary            String
+  details            String?
+  resolvedAt         DateTime?
+  resolvedByPersonId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdByPersonId  String
+
+  org              Org     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  person           Person  @relation("PersonnelWarningPerson", fields: [personId], references: [id], onDelete: Cascade)
+  createdByPerson  Person  @relation("PersonnelWarningCreator", fields: [createdByPersonId], references: [id], onDelete: Cascade)
+  resolvedByPerson Person? @relation("PersonnelWarningResolver", fields: [resolvedByPersonId], references: [id], onDelete: SetNull)
+
+  documents PersonnelDocument[]
+
+  @@index([orgId])
+  @@index([personId, issuedAt])
+  @@index([orgId, resolvedAt])
+}
+
+model PersonnelDocument {
+  id                 String   @id @default(cuid())
+  orgId              String
+  personId           String
+  noteId             String?
+  warningId          String?
+  title              String
+  fileName           String
+  mimeType           String?
+  sizeBytes          Int?
+  storageKey         String?
+  url                String?
+  uploadedAt         DateTime @default(now())
+  uploadedByPersonId String
+
+  org              Org             @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  person           Person          @relation("PersonnelDocumentPerson", fields: [personId], references: [id], onDelete: Cascade)
+  note             PersonnelNote?  @relation(fields: [noteId], references: [id], onDelete: SetNull)
+  warning          PersonnelWarning? @relation(fields: [warningId], references: [id], onDelete: SetNull)
+  uploadedByPerson Person          @relation("PersonnelDocumentUploader", fields: [uploadedByPersonId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([personId, uploadedAt])
+  @@index([noteId])
+  @@index([warningId])
 }
 
 model CompPlan {

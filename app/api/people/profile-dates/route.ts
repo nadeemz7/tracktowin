@@ -4,7 +4,7 @@ import { getOrgViewer } from "@/lib/getOrgViewer";
 
 type ParsedDate = { value: Date | null; error?: string };
 
-function parseDateInput(value: unknown, field: "dateOfBirth" | "startDate"): ParsedDate {
+function parseDateInput(value: unknown, field: "dateOfBirth" | "startDate" | "endDate"): ParsedDate {
   if (value === null) return { value: null };
   if (typeof value !== "string") {
     return { value: null, error: `Invalid ${field}` };
@@ -37,14 +37,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as any;
-  const providedPersonId = typeof body.personId === "string" ? body.personId.trim() : "";
-  const targetPersonId = providedPersonId || viewer.personId;
-
   const isOrgAdmin = Boolean(viewer?.isOwner || viewer?.isAdmin || viewer?.isManager);
-  if (targetPersonId !== viewer.personId && !isOrgAdmin) {
+  if (!isOrgAdmin) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const body = (await request.json().catch(() => ({}))) as any;
+  const providedPersonId = typeof body.personId === "string" ? body.personId.trim() : "";
+  if (!providedPersonId) {
+    return NextResponse.json({ error: "personId required" }, { status: 400 });
+  }
+  const targetPersonId = providedPersonId;
 
   const person = await prisma.person.findFirst({
     where: { id: targetPersonId, orgId: viewer.orgId },
@@ -56,11 +59,12 @@ export async function POST(request: Request) {
 
   const hasDateOfBirth = Object.prototype.hasOwnProperty.call(body, "dateOfBirth");
   const hasStartDate = Object.prototype.hasOwnProperty.call(body, "startDate");
-  if (!hasDateOfBirth && !hasStartDate) {
-    return NextResponse.json({ error: "Missing dateOfBirth or startDate" }, { status: 400 });
+  const hasEndDate = Object.prototype.hasOwnProperty.call(body, "endDate");
+  if (!hasDateOfBirth && !hasStartDate && !hasEndDate) {
+    return NextResponse.json({ error: "Missing dateOfBirth or startDate or endDate" }, { status: 400 });
   }
 
-  const data: { dateOfBirth?: Date | null; startDate?: Date | null } = {};
+  const data: { dateOfBirth?: Date | null; startDate?: Date | null; endDate?: Date | null } = {};
   if (hasDateOfBirth) {
     const parsed = parseDateInput(body.dateOfBirth, "dateOfBirth");
     if (parsed.error) {
@@ -75,11 +79,18 @@ export async function POST(request: Request) {
     }
     data.startDate = parsed.value;
   }
+  if (hasEndDate) {
+    const parsed = parseDateInput(body.endDate, "endDate");
+    if (parsed.error) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+    data.endDate = parsed.value;
+  }
 
   const updated = await prisma.person.update({
     where: { id: targetPersonId },
     data,
-    select: { id: true, dateOfBirth: true, startDate: true },
+    select: { id: true, dateOfBirth: true, startDate: true, endDate: true },
   });
 
   return NextResponse.json({ ok: true, person: updated });

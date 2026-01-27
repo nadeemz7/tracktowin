@@ -37,6 +37,16 @@ const NAV_LINKS: NavItem[] = [
     children: REPORTS_CHILDREN,
   },
   { href: "/people", label: "People & Roles", icon: "👥" },
+  {
+    href: "/personal-insights",
+    label: "Personal Insights",
+    icon: "💡",
+    children: [
+      { href: "/personal-insights/overview", label: "Overview" },
+      { href: "/personal-insights/weekly-check-in", label: "Weekly Check-In" },
+      { href: "/personal-insights/compensation", label: "Compensation" },
+    ],
+  },
   { href: "/paycheck", label: "Paycheck", icon: "💵" },
   {
     href: "/admin",

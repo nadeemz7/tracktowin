@@ -25,6 +25,9 @@ model Org {
   roles           OrgRole[]
   compPlans       CompPlan[]
   soldProducts    SoldProduct[]
+  checkInTemplates   CheckInTemplate[]
+  checkInAssignments TeamCheckInTemplateAssignment[]
+  checkInSubmissions CheckInSubmission[]
 }
 
 model OrgRole {
@@ -247,6 +250,7 @@ model Person {
   email                String?
   dateOfBirth          DateTime?
   startDate            DateTime?
+  endDate              DateTime?
   teamType             TeamType
   active               Boolean                        @default(true)
   teamId               String?
@@ -273,6 +277,8 @@ model Person {
   roiCompPlans         RoiCompPlan[]
   roiMonthlyInputs     RoiMonthlyInputs[]
   soldProducts         SoldProduct[]
+  checkInSubmissionsReceived CheckInSubmission[] @relation("CheckInSubmissionPerson")
+  checkInSubmissionsCreated  CheckInSubmission[] @relation("CheckInSubmissionCreator")
   winAssignments       WinTheDayPlanPersonAssignment?
   benchOverride        BenchPersonOverride?
   orgInvites           OrgInvite[]
@@ -387,6 +393,7 @@ model Team {
   commissionPlans      CommissionPlan[]
   people               Person[]
   roles                Role[]
+  checkInAssignments   TeamCheckInTemplateAssignment[]
   org                  Org                           @relation(fields: [orgId], references: [id], onDelete: Cascade)
   winAssignments       WinTheDayPlanTeamAssignment[] @relation("WTDTeamAssignments")
 
@@ -636,6 +643,88 @@ model WinTheDayPlanPersonAssignment {
   plan       WinTheDayPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
 
   @@index([planId])
+}
+
+model CheckInTemplate {
+  id            String                @id @default(cuid())
+  orgId         String
+  name          String
+  description   String?
+  frequencyType CheckInFrequencyType
+  intervalDays  Int?
+  weekStartDay  Int?
+  isActive      Boolean               @default(true)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  org             Org                          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  versions        CheckInTemplateVersion[]
+  teamAssignments TeamCheckInTemplateAssignment[]
+  submissions     CheckInSubmission[]
+
+  @@index([orgId])
+  @@unique([orgId, name])
+}
+
+model CheckInTemplateVersion {
+  id            String   @id @default(cuid())
+  templateId    String
+  version       Int
+  isCurrent     Boolean  @default(true)
+  questionsJson Json
+  createdAt     DateTime @default(now())
+
+  template    CheckInTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  submissions CheckInSubmission[]
+
+  @@unique([templateId, version])
+  @@index([templateId])
+}
+
+model TeamCheckInTemplateAssignment {
+  id         String   @id @default(cuid())
+  orgId      String
+  teamId     String
+  templateId String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  org      Org             @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  team     Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  template CheckInTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, templateId])
+  @@index([orgId])
+  @@index([teamId])
+  @@index([templateId])
+}
+
+model CheckInSubmission {
+  id                String   @id @default(cuid())
+  orgId             String
+  personId          String
+  teamId            String?
+  templateId        String
+  templateVersionId String
+  periodKey         String
+  periodStart       DateTime
+  periodEnd         DateTime
+  answersJson       Json
+  goalsJson         Json?
+  createdAt         DateTime @default(now())
+  createdByPersonId String
+
+  org             Org                    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  person          Person                 @relation("CheckInSubmissionPerson", fields: [personId], references: [id], onDelete: Cascade)
+  template        CheckInTemplate        @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  templateVersion CheckInTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  createdByPerson Person                 @relation("CheckInSubmissionCreator", fields: [createdByPersonId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, personId, templateId, periodKey])
+  @@index([orgId, periodStart])
+  @@index([personId, periodStart])
+  @@index([templateId, periodStart])
 }
 
 model CompPlan {
@@ -1140,4 +1229,20 @@ enum CommissionScope {
   ROLE
   PERSON
   TEAM_TYPE
+}
+
+enum CheckInFrequencyType {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+  CUSTOM_DAYS
+}
+
+enum CheckInQuestionType {
+  SCALE_1_10
+  TEXT_SHORT
+  TEXT_LONG
+  YES_NO
+  MULTIPLE_CHOICE
 }

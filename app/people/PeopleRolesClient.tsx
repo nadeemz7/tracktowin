@@ -14,6 +14,7 @@ type Person = {
   email?: string | null;
   dateOfBirth?: string | Date | null;
   startDate?: string | Date | null;
+  endDate?: string | Date | null;
   teamId?: string | null;
   roleId?: string | null;
   primaryAgencyId?: string | null;
@@ -146,9 +147,7 @@ export default function PeopleRolesClient({
 
   const selected = selectedId ? localPeople.find((p) => p.id === selectedId) || null : null;
   const roleDefaults = selected?.roleId ? expectationsMap.get(selected.roleId) : null;
-  const canEditDates = Boolean(
-    selected && (canManagePeople || (initialSelectedPersonId && selected.id === initialSelectedPersonId))
-  );
+  const canEditDates = Boolean(selected && canManagePeople);
 
   const [assignState, setAssignState] = useState<SaveState>({ saving: false, error: null, success: false });
   const [dateSaveState, setDateSaveState] = useState<SaveState>({ saving: false, error: null, success: false });
@@ -169,6 +168,7 @@ export default function PeopleRolesClient({
   const [activeInput, setActiveInput] = useState<boolean>(true);
   const [dobInput, setDobInput] = useState<string>("");
   const [startDateInput, setStartDateInput] = useState<string>("");
+  const [endDateInput, setEndDateInput] = useState<string>("");
 
   const { lobs: orgLobs, loading: orgLobsLoading, error: orgLobsError } = useOrgLobs();
   const { activityTypes: orgActivityTypes, loading: orgActivityLoading, error: orgActivityError } =
@@ -301,6 +301,7 @@ export default function PeopleRolesClient({
     setActiveInput(person.active !== false);
     setDobInput(toDateInputValue(person.dateOfBirth ?? null));
     setStartDateInput(toDateInputValue(person.startDate ?? null));
+    setEndDateInput(toDateInputValue(person.endDate ?? null));
     if (person?.id) hydrateOverrideInputs(person.id);
     const assignedOrgRoleIds = Array.from(
       new Set(
@@ -425,11 +426,12 @@ export default function PeopleRolesClient({
     if (!selected || !canEditDates) return;
     setDateSaveState({ saving: true, error: null, success: false });
     try {
-      const payload: { personId?: string; dateOfBirth?: string | null; startDate?: string | null } = {
+      const payload: { personId: string; dateOfBirth?: string | null; startDate?: string | null; endDate?: string | null } = {
+        personId: selected.id,
         dateOfBirth: dobInput.trim() === "" ? null : dobInput.trim(),
         startDate: startDateInput.trim() === "" ? null : startDateInput.trim(),
+        endDate: endDateInput.trim() === "" ? null : endDateInput.trim(),
       };
-      if (canManagePeople) payload.personId = selected.id;
       const res = await fetch("/api/people/profile-dates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -455,12 +457,14 @@ export default function PeopleRolesClient({
                 ...p,
                 dateOfBirth: updated?.dateOfBirth ?? payload.dateOfBirth ?? null,
                 startDate: updated?.startDate ?? payload.startDate ?? null,
+                endDate: updated?.endDate ?? payload.endDate ?? null,
               }
             : p
         )
       );
       setDobInput(toDateInputValue(updated?.dateOfBirth ?? payload.dateOfBirth));
       setStartDateInput(toDateInputValue(updated?.startDate ?? payload.startDate));
+      setEndDateInput(toDateInputValue(updated?.endDate ?? payload.endDate));
       setDateSaveState({ saving: false, error: null, success: true });
     } catch (err: any) {
       setDateSaveState({ saving: false, error: err?.message || "Save failed", success: false });
@@ -885,7 +889,25 @@ export default function PeopleRolesClient({
                     style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
                   />
                 </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span style={{ fontWeight: 600 }}>End date</span>
+                  <input
+                    type="date"
+                    value={endDateInput}
+                    onChange={(e) => {
+                      setEndDateInput(e.target.value);
+                      setDateSaveState({ saving: false, error: null, success: false });
+                    }}
+                    disabled={!canEditDates}
+                    style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
+                  />
+                </label>
               </div>
+              {!canEditDates ? (
+                <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                  Only admins/managers can update these fields.
+                </div>
+              ) : null}
               <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
                 <button
                   type="button"
